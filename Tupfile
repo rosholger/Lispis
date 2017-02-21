@@ -1,0 +1,2 @@
+: foreach *.cpp |> g++ -fno-strict-aliasing -Wall -O0 -g -c %f |> %B.o
+: *.o |> g++ -fno-strict-aliasing %f -Wall -O0 -g -o %o |> lispis
