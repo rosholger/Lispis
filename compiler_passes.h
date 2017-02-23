@@ -1,13 +1,16 @@
 #ifndef COMPILER_PASSES_H
 #define COMPILER_PASSES_H
 #include "common.h"
-extern String quote;
-extern String lambda;
-extern String let;
-extern String ifSym;
+extern uint32 quote;
+extern uint32 lambda;
+extern uint32 let;
+extern uint32 ifSym;
 struct Expr;
-Expr *quotePass(Expr *expr);
-Expr *lambdaPass(Expr *expr);
-Expr *letPass(Expr *expr);
-Expr *ifPass(Expr *expr);
+struct LispisState;
+// IN ORDER!!!!
+Expr *symbolIdPass(LispisState *state, Expr *expr);
+Expr *quotePass(LispisState *state, Expr *expr);
+Expr *lambdaPass(LispisState *state, Expr *expr);
+Expr *letPass(LispisState *state, Expr *expr);
+Expr *ifPass(LispisState *state, Expr *expr);
 #endif

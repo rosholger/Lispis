@@ -419,7 +419,7 @@ Value runFunction(LispisState *state, LispisFunction *func) {
                     push(state, nanPackInt32(numArgs));
                     goto CALL;
                 } else {
-                    assert(false);
+                    assert(!"Can't call this type\n");
                 }
             } break;
             case OP_PUSH_LAMBDA_ID: {
@@ -648,36 +648,6 @@ int main(int argsc, char **args) {
     assert(sizeof(Bytecode) == sizeof(uint64));
 
     // CompileTime
-    quote.val = (char *)"quote";
-    quote.length = strlen(quote.val);
-    quoteSym.exprType = EXPR_SYMBOL;
-    quoteSym.str = quote;
-    lambda.val = (char *)"lambda";
-    lambda.length = strlen(lambda.val);
-    let.val = (char *)"let!";
-    let.length = strlen(let.val);
-    ifSym.val = (char *)"if";
-    ifSym.length = strlen(ifSym.val);
-    char *fileContent = readEntireFile((char *)"./test.lsp");
-    Lexer lexer = {fileContent};
-    eatToken(&lexer);
-    Expr *parseTreeExpr = parseExpression(&lexer);
-    printf("ParseTree:\n");
-    dumpTree(parseTreeExpr, 0);
-    Expr *astExpr1 = quotePass(parseTreeExpr);
-    Expr *astExpr2 = lambdaPass(astExpr1);
-    dealloc(astExpr1);
-    astExpr1 = 0;
-    astExpr1 = letPass(astExpr2);
-    dealloc(astExpr2);
-    astExpr2 = 0;
-    astExpr2 = ifPass(astExpr1);
-    dealloc(astExpr1);
-    astExpr1 = 0;
-    Expr *astDone = astExpr2;
-    printf("AST:\n");
-    dumpTree(astDone, 0);
-
     LispisState state = {};
     state.globalEnviroment.parentEnv = 0;
     state.globalSymbolTable.symbolsSize = 256;
@@ -703,6 +673,25 @@ int main(int argsc, char **args) {
 
 
     // standard library
+
+    String quoteStr;
+    quoteStr.val = (char *)"quote";
+    quoteStr.length = strlen(quoteStr.val);
+    quote = internSymbol(&state, quoteStr, hashFunc(quoteStr));
+    quoteSym.exprType = EXPR_SYMBOL;
+    quoteSym.str = quoteStr;
+    String lambdaStr;
+    lambdaStr.val = (char *)"lambda";
+    lambdaStr.length = strlen(lambdaStr.val);
+    lambda = internSymbol(&state, lambdaStr, hashFunc(lambdaStr));
+    String letStr;
+    letStr.val = (char *)"let!";
+    letStr.length = strlen(letStr.val);
+    let = internSymbol(&state, letStr, hashFunc(letStr));
+    String ifStr;
+    ifStr.val = (char *)"if";
+    ifStr.length = strlen(ifStr.val);
+    ifSym = internSymbol(&state, ifStr, hashFunc(ifStr));
 
 
     String addSymbol;
@@ -748,12 +737,38 @@ int main(int argsc, char **args) {
     entry->bytecodeSize = 256;
     entry->bytecode =
         (Bytecode *)calloc(1, entry->bytecodeSize * sizeof(Bytecode));
-    compileExpression(&state, entry, astDone);
-    dealloc(astExpr2);
-    dealloc(astExpr1);
-    dealloc(parseTreeExpr);
 
-
+    char *fileContent = readEntireFile((char *)"./test.lsp");
+    Lexer lexer = {fileContent};
+    eatToken(&lexer);
+    while (peekToken(&lexer).tokenType != TOK_EOF) {
+        Expr *parseTreeExpr = parseExpression(&lexer);
+        printf("ParseTree:\n");
+        dumpTree(&state, parseTreeExpr, 0);
+        Expr *astExpr2 = symbolIdPass(&state, parseTreeExpr);
+        Expr *astExpr1 = quotePass(&state, astExpr2);
+        dealloc(astExpr2);
+        astExpr2 = 0;
+        astExpr2 = lambdaPass(&state, astExpr1);
+        dealloc(astExpr1);
+        astExpr1 = 0;
+        astExpr1 = letPass(&state, astExpr2);
+        dealloc(astExpr2);
+        astExpr2 = 0;
+        astExpr2 = ifPass(&state, astExpr1);
+        dealloc(astExpr1);
+        astExpr1 = 0;
+        Expr *astDone = astExpr2;
+        printf("AST:\n");
+        dumpTree(&state, astDone, 0);
+        compileExpression(&state, entry, astDone);
+        dealloc(astExpr2);
+        dealloc(astExpr1);
+        dealloc(parseTreeExpr);
+        if (peekToken(&lexer).tokenType != TOK_EOF) {
+            pushOp(&state, entry, OP_CLEAR_STACK);
+        }
+    }
     pushOp(&state, entry, OP_RETURN);
     dumpBytecode(&state, entry);
 

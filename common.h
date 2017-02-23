@@ -51,7 +51,10 @@ union Bytecode {
 struct Expr;
 struct LispisState;
 struct LispisFunction;
-void dumpTree(Expr *node, int identLevel);
+struct SymbolTable;
+String globalSymbolIdToSymbol(SymbolTable *globalSymbolTable,
+                              uint32 globalSymbolId);
+void dumpTree(LispisState *state, Expr *node, int identLevel);
 void dumpSymbolSection(LispisState *state,
                        LispisFunction *func);
 void dumpBytecode(LispisState *state, LispisFunction *func);

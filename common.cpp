@@ -7,7 +7,7 @@
 #include "parser.h"
 #include "codegen.h"
 
-void dumpTree(Expr *node, int identLevel) {
+void dumpTree(LispisState *state, Expr *node, int identLevel) {
     for (int i = 0; i < identLevel; ++i) {
         printf("  ");
     }
@@ -16,7 +16,7 @@ void dumpTree(Expr *node, int identLevel) {
             case EXPR_LIST: {
                 printf("(\n");
                 for (ExprList *e = node->list; e; e = e->next) {
-                    dumpTree(e->val, identLevel+1);
+                    dumpTree(state, e->val, identLevel+1);
                 }
                 for (int i = 0; i < identLevel; ++i) {
                     printf("  ");
@@ -25,7 +25,7 @@ void dumpTree(Expr *node, int identLevel) {
             } break;
             case EXPR_QUOTE: {
                 printf("(QUOTE\n");
-                dumpTree(node->quoted, identLevel+1);
+                dumpTree(state, node->quoted, identLevel+1);
                 printf(")");
             } break;
             case EXPR_STRING: {
@@ -40,13 +40,19 @@ void dumpTree(Expr *node, int identLevel) {
             case EXPR_SYMBOL: {
                 printf("%.*s", (int)node->str.length, node->str.val);
             } break;
+            case EXPR_SYMBOL_ID: {
+                String symStr =
+                    globalSymbolIdToSymbol(&state->globalSymbolTable,
+                                           node->symbolID);
+                printf("%.*s", (int)symStr.length, symStr.val);
+            } break;
             case EXPR_CALL: {
                 printf("(");
                 if (node->callee) {
-                    dumpTree(node->callee, 0);
+                    dumpTree(state, node->callee, 0);
                     for (ExprList *param = node->arguments;
                          param; param = param->next) {
-                        dumpTree(param->val, identLevel+1);
+                        dumpTree(state, param->val, identLevel+1);
                     }
                     for (int i = 0; i < identLevel; ++i) {
                         printf("  ");
@@ -61,7 +67,7 @@ void dumpTree(Expr *node, int identLevel) {
                 if (node->params) {
                     for (ExprList *param = node->params;
                          param; param = param->next) {
-                        dumpTree(param->val, identLevel+1);
+                        dumpTree(state, param->val, identLevel+1);
                     }
                 }
                 for (int i = 0; i < identLevel; ++i) {
@@ -70,7 +76,7 @@ void dumpTree(Expr *node, int identLevel) {
                 printf(")\n");
                 for (ExprList *expr = node->body;
                      expr; expr = expr->next) {
-                    dumpTree(expr->val, identLevel+1);
+                    dumpTree(state, expr->val, identLevel+1);
                 }
                 for (int i = 0; i < identLevel; ++i) {
                     printf("  ");
@@ -78,10 +84,9 @@ void dumpTree(Expr *node, int identLevel) {
                 printf(")\n");
             } break;
             case EXPR_LET: {
-                printf("(LET! %.*s \n",
-                       node->variable->str.length,
-                       node->variable->str.val);
-                dumpTree(node->value, identLevel + 1);
+                printf("(LET!\n");
+                dumpTree(state, node->variable, identLevel + 1);
+                dumpTree(state, node->value, identLevel + 1);
                 for (int i = 0; i < identLevel; ++i) {
                     printf("  ");
                 }
@@ -89,10 +94,10 @@ void dumpTree(Expr *node, int identLevel) {
             } break;
             case EXPR_IF: {
                 printf("(IF\n");
-                dumpTree(node->predicate, identLevel + 1);
-                dumpTree(node->trueBranch, identLevel + 2);
+                dumpTree(state, node->predicate, identLevel + 1);
+                dumpTree(state, node->trueBranch, identLevel + 2);
                 if (node->falseBranch) {
-                    dumpTree(node->falseBranch, identLevel + 2);
+                    dumpTree(state, node->falseBranch, identLevel + 2);
                 }
                 for (int i = 0; i < identLevel; ++i) {
                     printf("  ");

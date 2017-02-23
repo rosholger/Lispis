@@ -1,48 +1,89 @@
 #include "compiler_passes.h"
 #include "parser.h"
+#include "vm.h"
 #include <cstdlib>
 #include <cassert>
 
-String quote;
-String lambda;
-String let;
-String ifSym;
+uint32 quote;
+uint32 lambda;
+uint32 let;
+uint32 ifSym;
 
-Expr *createQuotedList(Expr *expr);
-
-Expr *createQuotedElement(Expr *expr) {
-    Expr *ret = 0;
+Expr *symbolIdPass(LispisState *state, Expr *expr) {
+    Expr *ret = (Expr *)malloc(sizeof(Expr));
     switch (expr->exprType) {
         case EXPR_STRING:
         case EXPR_INT:
-        case EXPR_FLOAT:
-        case EXPR_SYMBOL: {
-            ret = (Expr *)malloc(sizeof(Expr));
+        case EXPR_FLOAT: {
             *ret = *expr;
         } break;
+        case EXPR_SYMBOL: {
+            *ret = *expr;
+            ret->exprType = EXPR_SYMBOL_ID;
+            ret->symbolID = internSymbol(state, expr->str,
+                                         hashFunc(expr->str));
+        } break;
         case EXPR_CALL: {
-            ret = createQuotedList(expr);
+            *ret = *expr;
+            if (expr->callee) {
+                ret->callee = symbolIdPass(state, expr->callee);
+                ret->arguments = 0;
+                if (expr->arguments) {
+                    ret->arguments = (ExprList *)malloc(sizeof(ExprList));
+                    ret->arguments->val =
+                        symbolIdPass(state,
+                                     expr->arguments->val);
+                    ExprList *prev = ret->arguments;
+                    for (ExprList *param = expr->arguments->next;
+                         param; param = param->next) {
+                        prev->next = (ExprList *)malloc(sizeof(ExprList));
+                        prev = prev->next;
+                        prev->val = symbolIdPass(state, param->val);
+                    }
+                    prev->next = 0;
+                }
+            }
         } break;
         default:assert(false);
     }
     return ret;
 }
 
-Expr *createQuotedList(Expr *expr) {
+Expr *createQuotedList(LispisState *state, Expr *expr);
+
+Expr *createQuotedElement(LispisState *state, Expr *expr) {
+    Expr *ret = 0;
+    switch (expr->exprType) {
+        case EXPR_STRING:
+        case EXPR_INT:
+        case EXPR_FLOAT:
+        case EXPR_SYMBOL_ID: {
+            ret = (Expr *)malloc(sizeof(Expr));
+            *ret = *expr;
+        } break;
+        case EXPR_CALL: {
+            ret = createQuotedList(state, expr);
+        } break;
+        default:assert(false);
+    }
+    return ret;
+}
+
+Expr *createQuotedList(LispisState *state, Expr *expr) {
     Expr *ret = (Expr *)malloc(sizeof(Expr));
     *ret = *expr;
     ret->exprType = EXPR_LIST;
     ExprList *list = 0;
     if (expr->callee) {
         list = (ExprList *)malloc(sizeof(ExprList));
-        list->val = createQuotedElement(expr->callee);
+        list->val = createQuotedElement(state, expr->callee);
         list->next = 0;
         ExprList *prev = list;
         for (ExprList *argument = expr->arguments;
              argument; argument = argument->next) {
             prev->next = (ExprList *)malloc(sizeof(ExprList));
             prev = prev->next;
-            prev->val = createQuotedElement(argument->val);
+            prev->val = createQuotedElement(state, argument->val);
             prev->next = 0;
         }
     } else {
@@ -52,46 +93,47 @@ Expr *createQuotedList(Expr *expr) {
     return ret;
 }
 
-Expr *quotePass(Expr *expr) {
+Expr *quotePass(LispisState *state, Expr *expr) {
     Expr *ret = (Expr *)malloc(sizeof(Expr));
     switch (expr->exprType) {
         case EXPR_STRING:
         case EXPR_INT:
         case EXPR_FLOAT:
-        case EXPR_SYMBOL: {
+        case EXPR_SYMBOL_ID: {
             *ret = *expr;
         } break;
         case EXPR_CALL: {
-            if (expr->callee && expr->callee->exprType == EXPR_SYMBOL) {
-                if (symCmp(quote,
-                           hashFunc(quote),
-                           expr->callee->str,
-                           hashFunc(expr->callee->str))) {
+            if (expr->callee &&
+                expr->callee->exprType == EXPR_SYMBOL_ID) {
+                if (expr->callee->symbolID == quote) {
                     ret->exprType = EXPR_QUOTE;
                     ret->line = expr->line;
                     assert(expr->arguments);
                     assert(!expr->arguments->next);
                     if (expr->arguments->val->exprType == EXPR_CALL) {
-                        ret->quoted = createQuotedList(expr->arguments->val);
+                        ret->quoted = createQuotedList(state,
+                                                       expr->arguments->val);
                     } else {
-                        ret->quoted = quotePass(expr->arguments->val);
+                        ret->quoted = quotePass(state,
+                                                expr->arguments->val);
                     }
                     return ret;
                 }
             }
             *ret = *expr;
             if (expr->callee) {
-                ret->callee = quotePass(expr->callee);
+                ret->callee = quotePass(state, expr->callee);
                 ret->arguments = 0;
                 if (expr->arguments) {
                     ret->arguments = (ExprList *)malloc(sizeof(ExprList));
-                    ret->arguments->val = quotePass(expr->arguments->val);
+                    ret->arguments->val = quotePass(state,
+                                                    expr->arguments->val);
                     ExprList *prev = ret->arguments;
                     for (ExprList *param = expr->arguments->next;
                          param; param = param->next) {
                         prev->next = (ExprList *)malloc(sizeof(ExprList));
                         prev = prev->next;
-                        prev->val = quotePass(param->val);
+                        prev->val = quotePass(state, param->val);
                     }
                     prev->next = 0;
                 }
@@ -102,13 +144,13 @@ Expr *quotePass(Expr *expr) {
     return ret;
 }
 
-Expr *copyQuoted(Expr *expr) {
+Expr *copyQuoted(LispisState *state, Expr *expr) {
     Expr *ret = 0;
     switch (expr->exprType) {
         case EXPR_STRING:
         case EXPR_INT:
         case EXPR_FLOAT:
-        case EXPR_SYMBOL: {
+        case EXPR_SYMBOL_ID: {
             ret = (Expr *)malloc(sizeof(Expr));
             *ret = *expr;
         } break;
@@ -117,13 +159,14 @@ Expr *copyQuoted(Expr *expr) {
             *ret = *expr;
             if (expr->list) {
                 ret->list = (ExprList *)malloc(sizeof(ExprList));
+                ret->list->val = copyQuoted(state, expr->list->val);
                 ret->list->next = 0;
                 ExprList *prev = ret->list;
-                for (ExprList *elem = expr->list;
+                for (ExprList *elem = expr->list->next;
                      elem; elem = elem->next) {
                     prev->next = (ExprList *)malloc(sizeof(ExprList));
                     prev = prev->next;
-                    prev->val = copyQuoted(elem->val);
+                    prev->val = copyQuoted(state, elem->val);
                     prev->next = 0;
                 }
             }
@@ -133,25 +176,22 @@ Expr *copyQuoted(Expr *expr) {
     return ret;
 }
 
-Expr *lambdaPass(Expr *expr) {
+Expr *lambdaPass(LispisState *state, Expr *expr) {
     Expr *ret = (Expr *)malloc(sizeof(Expr));
     switch (expr->exprType) {
         case EXPR_STRING:
         case EXPR_INT:
         case EXPR_FLOAT:
-        case EXPR_SYMBOL: {
+        case EXPR_SYMBOL_ID: {
             *ret = *expr;
         } break;
         case EXPR_QUOTE: {
             *ret = *expr;
-            ret->quoted = copyQuoted(expr->quoted);
+            ret->quoted = copyQuoted(state, expr->quoted);
         } break;
         case EXPR_CALL: {
-            if (expr->callee && expr->callee->exprType == EXPR_SYMBOL) {
-                if (symCmp(lambda,
-                           hashFunc(lambda),
-                           expr->callee->str,
-                           hashFunc(expr->callee->str))) {
+            if (expr->callee && expr->callee->exprType == EXPR_SYMBOL_ID) {
+                if (expr->callee->symbolID == lambda) {
                     ret->exprType = EXPR_LAMBDA;
                     ret->line = expr->line;
                     ret->params = 0;
@@ -160,7 +200,7 @@ Expr *lambdaPass(Expr *expr) {
                     assert(expr->arguments->val->exprType == EXPR_CALL);
                     if (expr->arguments->val->callee) {
                         assert(expr->arguments->val->callee->exprType ==
-                               EXPR_SYMBOL);
+                               EXPR_SYMBOL_ID);
                         ret->params =
                             (ExprList *)malloc(sizeof(ExprList));
                         ret->params->val = (Expr *)malloc(sizeof(Expr));
@@ -172,7 +212,7 @@ Expr *lambdaPass(Expr *expr) {
                         for (ExprList *param =
                                  expr->arguments->val->arguments;
                              param; param = param->next) {
-                            assert(param->val->exprType = EXPR_SYMBOL);
+                            assert(param->val->exprType = EXPR_SYMBOL_ID);
                             prev->next =
                                 (ExprList *)malloc(sizeof(ExprList));
                             prev = prev->next;
@@ -184,7 +224,7 @@ Expr *lambdaPass(Expr *expr) {
                     }                    assert(expr->arguments->next);
                     ret->body = (ExprList *)malloc(sizeof(ExprList));
                     ret->body->val =
-                        lambdaPass(expr->arguments->next->val);
+                        lambdaPass(state, expr->arguments->next->val);
                     ret->body->next = 0;
                     ExprList *prev = ret->body;
                     for (ExprList *param =
@@ -192,7 +232,7 @@ Expr *lambdaPass(Expr *expr) {
                          param; param = param->next) {
                         prev->next = (ExprList *)malloc(sizeof(ExprList));
                         prev = prev->next;
-                        prev->val = lambdaPass(param->val);
+                        prev->val = lambdaPass(state, param->val);
                         prev->next = 0;
                     }
                     return ret;
@@ -200,17 +240,18 @@ Expr *lambdaPass(Expr *expr) {
             }
             *ret = *expr;
             if (expr->callee) {
-                ret->callee = lambdaPass(expr->callee);
+                ret->callee = lambdaPass(state, expr->callee);
                 ret->arguments = 0;
                 if (expr->arguments) {
                     ret->arguments = (ExprList *)malloc(sizeof(ExprList));
-                    ret->arguments->val = lambdaPass(expr->arguments->val);
+                    ret->arguments->val = lambdaPass(state,
+                                                     expr->arguments->val);
                     ExprList *prev = ret->arguments;
                     for (ExprList *param = expr->arguments->next;
                          param; param = param->next) {
                         prev->next = (ExprList *)malloc(sizeof(ExprList));
                         prev = prev->next;
-                        prev->val = lambdaPass(param->val);
+                        prev->val = lambdaPass(state, param->val);
                     }
                     prev->next = 0;
                 }
@@ -221,16 +262,16 @@ Expr *lambdaPass(Expr *expr) {
     return ret;
 }
 
-ExprList *copyLambdaParams(ExprList *params) {
+ExprList *copyLambdaParams(LispisState *state, ExprList *params) {
     if (params) {
-        assert(params->val->exprType == EXPR_SYMBOL);
+        assert(params->val->exprType == EXPR_SYMBOL_ID);
         ExprList *ret = (ExprList *)malloc(sizeof(ExprList));
         ret->val = (Expr *)malloc(sizeof(Expr));
         *ret->val = *params->val;
         ret->next = 0;
         ExprList *prev = ret;
         for (ExprList *param = params->next; param; param = param->next) {
-            assert(param->val->exprType == EXPR_SYMBOL);
+            assert(param->val->exprType == EXPR_SYMBOL_ID);
             prev->next = (ExprList *)malloc(sizeof(ExprList));
             prev = prev->next;
             prev->val = (Expr *)malloc(sizeof(Expr));
@@ -243,72 +284,72 @@ ExprList *copyLambdaParams(ExprList *params) {
     }
 }
 
-ExprList *copyLambdaBody(ExprList *body,
-                         Expr *(*recursiveFunc)(Expr *e)) {
+ExprList *copyLambdaBody(LispisState *state, ExprList *body,
+                         Expr *(*recursiveFunc)(LispisState *state,
+                                                Expr *e)) {
     assert(body);
     ExprList *ret = (ExprList *)malloc(sizeof(ExprList));
-    ret->val = recursiveFunc(body->val);
+    ret->val = recursiveFunc(state, body->val);
     ret->next = 0;
     ExprList *prev = ret;
     for (ExprList *expr = body->next; expr; expr = expr->next) {
         prev->next = (ExprList *)malloc(sizeof(ExprList));
         prev = prev->next;
         prev->next = 0;
-        prev->val = recursiveFunc(expr->val);
+        prev->val = recursiveFunc(state, expr->val);
     }
     return ret;
 }
 
-Expr *letPass(Expr *expr) {
+Expr *letPass(LispisState *state, Expr *expr) {
     Expr *ret = (Expr *)malloc(sizeof(Expr));
     switch (expr->exprType) {
         case EXPR_STRING:
         case EXPR_INT:
         case EXPR_FLOAT:
-        case EXPR_SYMBOL: {
+        case EXPR_SYMBOL_ID: {
             *ret = *expr;
         } break;
         case EXPR_QUOTE: {
             *ret = *expr;
-            ret->quoted = copyQuoted(expr->quoted);
+            ret->quoted = copyQuoted(state, expr->quoted);
         } break;
         case EXPR_LAMBDA: {
             *ret = *expr;
-            ret->params = copyLambdaParams(expr->params);
-            ret->body = copyLambdaBody(expr->body, letPass);
+            ret->params = copyLambdaParams(state, expr->params);
+            ret->body = copyLambdaBody(state, expr->body, letPass);
         } break;
         case EXPR_CALL: {
-            if (expr->callee && expr->callee->exprType == EXPR_SYMBOL) {
-                if (symCmp(let,
-                           hashFunc(let),
-                           expr->callee->str,
-                           hashFunc(expr->callee->str))) {
+            if (expr->callee && expr->callee->exprType == EXPR_SYMBOL_ID) {
+                if (expr->callee->symbolID == let) {
                     ret->exprType = EXPR_LET;
                     ret->line = expr->line;
                     assert(expr->arguments);
                     assert(expr->arguments->val);
-                    assert(expr->arguments->val->exprType == EXPR_SYMBOL);
+                    assert(expr->arguments->val->exprType == EXPR_SYMBOL_ID);
                     assert(expr->arguments->next);
                     assert(! expr->arguments->next->next);
                     ret->variable = (Expr *)malloc(sizeof(Expr));
                     *ret->variable = *expr->arguments->val;
-                    ret->value = letPass(expr->arguments->next->val);
+                    ret->value = letPass(state,
+                                         expr->arguments->next->val);
                     return ret;
                 }
             }
             *ret = *expr;
             if (expr->callee) {
-                ret->callee = letPass(expr->callee);
+                ret->callee = letPass(state, expr->callee);
                 ret->arguments = 0;
                 if (expr->arguments) {
                     ret->arguments = (ExprList *)malloc(sizeof(ExprList));
-                    ret->arguments->val = letPass(expr->arguments->val);
+                    ret->arguments->val = letPass(state,
+                                                  expr->arguments->val);
                     ExprList *prev = ret->arguments;
                     for (ExprList *param = expr->arguments->next;
                          param; param = param->next) {
                         prev->next = (ExprList *)malloc(sizeof(ExprList));
                         prev = prev->next;
-                        prev->val = letPass(param->val);
+                        prev->val = letPass(state, param->val);
                     }
                     prev->next = 0;
                 }
@@ -319,63 +360,63 @@ Expr *letPass(Expr *expr) {
     return ret;
 }
 
-Expr *ifPass(Expr *expr) {
+Expr *ifPass(LispisState *state, Expr *expr) {
     Expr *ret = (Expr *)malloc(sizeof(Expr));
     switch (expr->exprType) {
         case EXPR_STRING:
         case EXPR_INT:
         case EXPR_FLOAT:
-        case EXPR_SYMBOL: {
+        case EXPR_SYMBOL_ID: {
             *ret = *expr;
         } break;
         case EXPR_QUOTE: {
             *ret = *expr;
-            ret->quoted = copyQuoted(expr->quoted);
+            ret->quoted = copyQuoted(state, expr->quoted);
         } break;
         case EXPR_LAMBDA: {
             *ret = *expr;
-            ret->params = copyLambdaParams(expr->params);
-            ret->body = copyLambdaBody(expr->body, ifPass);
+            ret->params = copyLambdaParams(state, expr->params);
+            ret->body = copyLambdaBody(state, expr->body, ifPass);
         } break;
         case EXPR_LET: {
             *ret = *expr;
             ret->variable = (Expr *)malloc(sizeof(Expr));
             *ret->variable = *expr->variable;
-            ret->value = ifPass(expr->value);
+            ret->value = ifPass(state, expr->value);
         } break;
         case EXPR_CALL: {
-            if (expr->callee && expr->callee->exprType == EXPR_SYMBOL) {
-                if (symCmp(ifSym,
-                           hashFunc(ifSym),
-                           expr->callee->str,
-                           hashFunc(expr->callee->str))) {
+            if (expr->callee && expr->callee->exprType == EXPR_SYMBOL_ID) {
+                if (expr->callee->symbolID == ifSym) {
                     ret->exprType = EXPR_IF;
                     ret->line = expr->line;
                     assert(expr->arguments); // predicate
-                    ret->predicate = ifPass(expr->arguments->val);
+                    ret->predicate = ifPass(state, expr->arguments->val);
                     assert(expr->arguments->val);
                     assert(expr->arguments->next); // trueBranch
-                    ret->trueBranch = ifPass(expr->arguments->next->val);
+                    ret->trueBranch = ifPass(state,
+                                             expr->arguments->next->val);
                     if (expr->arguments->next->next) { // falseBranch
                         ret->falseBranch =
-                            ifPass(expr->arguments->next->next->val);
+                            ifPass(state,
+                                   expr->arguments->next->next->val);
                     }
                     return ret;
                 }
             }
             *ret = *expr;
             if (expr->callee) {
-                ret->callee = ifPass(expr->callee);
+                ret->callee = ifPass(state, expr->callee);
                 ret->arguments = 0;
                 if (expr->arguments) {
                     ret->arguments = (ExprList *)malloc(sizeof(ExprList));
-                    ret->arguments->val = ifPass(expr->arguments->val);
+                    ret->arguments->val = ifPass(state,
+                                                 expr->arguments->val);
                     ExprList *prev = ret->arguments;
                     for (ExprList *param = expr->arguments->next;
                          param; param = param->next) {
                         prev->next = (ExprList *)malloc(sizeof(ExprList));
                         prev = prev->next;
-                        prev->val = ifPass(param->val);
+                        prev->val = ifPass(state, param->val);
                     }
                     prev->next = 0;
                 }

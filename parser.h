@@ -16,6 +16,7 @@ enum ExprType {
     EXPR_LIST,
     EXPR_LET,
     EXPR_IF,
+    EXPR_SYMBOL_ID,
 };
 
 struct Expr;
@@ -30,6 +31,7 @@ struct Expr {
         struct { // QUOTE
             Expr *quoted;
         };
+        uint32 symbolID;
         String str; // SYMBOL, STRING
         int intVal; // INT
         float floatVal; // FLOAT

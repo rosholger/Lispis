@@ -91,8 +91,8 @@ void set(LispisState *state, LispisFunction *func, Value v, uint64 pos) {
     func->bytecode[pos] = v;
 }
 
-void pushSymbol(LispisState *state, LispisFunction *func, String str) {
-    uint32 symbolIdx = internSymbol(state, str, hashFunc(str));
+void pushSymbol(LispisState *state, LispisFunction *func, uint32 str) {
+    uint32 symbolIdx = str;
     pushDouble(state, func, nanPackSymbolIdx(symbolIdx).f64);
 }
 
@@ -103,9 +103,9 @@ void compileQuotedExpr(LispisState *state, LispisFunction *func, Expr *expr) {
         case EXPR_LIST: {
             compileQuotedList(state, func, expr->list);
         } break;
-        case EXPR_SYMBOL: {
+        case EXPR_SYMBOL_ID: {
             pushOp(state, func, OP_PUSH);
-            pushSymbol(state, func, expr->str);
+            pushSymbol(state, func, expr->symbolID);
         } break;
         default: {
             compileExpression(state, func, expr);
@@ -178,9 +178,9 @@ void compileLambdaParamsRec(LispisState *state, LispisFunction *func, ExprList *
     if (params->next) {
         compileLambdaParamsRec(state, func, params->next);
     }
-    assert(params->val->exprType == EXPR_SYMBOL);
+    assert(params->val->exprType == EXPR_SYMBOL_ID);
     pushOp(state, func, OP_PUSH);
-    pushSymbol(state, func, params->val->str);
+    pushSymbol(state, func, params->val->symbolID);
     pushOp(state, func, OP_SET_LOCAL_VARIABLE);
 }
 
@@ -228,9 +228,9 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
             pushOp(state, func, OP_PUSH);
             pushDouble(state, func, expr->floatVal);
         } break;
-        case EXPR_SYMBOL: {
+        case EXPR_SYMBOL_ID: {
             pushOp(state, func, OP_PUSH);
-            pushSymbol(state, func, expr->str);
+            pushSymbol(state, func, expr->symbolID);
             pushOp(state, func, OP_EVAL_SYMBOL);
         } break;
         case EXPR_CALL: {
@@ -258,7 +258,7 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
         case EXPR_LET: {
             compileExpression(state, func, expr->value);
             pushOp(state, func, OP_PUSH);
-            pushSymbol(state, func, expr->variable->str);
+            pushSymbol(state, func, expr->variable->symbolID);
             pushOp(state, func, OP_SET_LOCAL_VARIABLE);
             // makes let! return the value, prob. pretty slow...
             compileExpression(state, func, expr->variable);
