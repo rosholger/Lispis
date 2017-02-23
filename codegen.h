@@ -22,9 +22,12 @@ struct CompilerState {
     uint64 bytecodeTop;
     uint64 bytecodeSize;
     SymbolIndexMap symbolIndexMap;
+    CompilerState *childStates;
+    int64 childStatesLength;
 };
 
 void compileExpression(CompilerState *state, Expr *expr);
 void encodeSymbolSection(CompilerState *compiler);
 void pushOp(CompilerState *state, OpCodes op);
+Bytecode *compactBytecode(CompilerState *state);
 #endif

@@ -15,13 +15,17 @@ enum OpCodes {
     OP_EXIT,
     OP_PUSH,
     OP_PUSH_TRANSLATE_SYMBOL,
-    OP_SET_LOCAL_SYMBOL,
+    OP_SET_LOCAL_VARIABLE,
     OP_CALL,
     OP_RETURN,
     OP_SYMBOL_SECTION,
     OP_LIST,
     OP_EVAL_SYMBOL,
-    OP_CLEAR_STACK
+    OP_CLEAR_STACK,
+    OP_POP_ASSERT_EQUAL,
+    OP_PUSH_LAMBDA_ID,
+    OP_JUMP_IF_TRUE,
+    OP_JUMP,
 };
 
 // TODO: switch all cases of bytecode from uint64 * to Bytecode *
@@ -46,9 +50,10 @@ union Bytecode {
 };
 
 struct Expr;
+struct CompilerState;
 void dumpTree(Expr *node, int identLevel);
-void dumpSymbolSection(Bytecode *bytecode);
-void dumpBytecode(Bytecode *bytecode);
+void dumpSymbolSection(CompilerState *state);
+void dumpBytecode(CompilerState *state);
 void dealloc(Expr *expr);
 char *readEntireFile(char *filename);
 bool symCmp(String a, uint64 hashA, String b, uint64 hashB);
@@ -56,12 +61,14 @@ uint64 hashFunc(String str);
 
 enum NanPackingTypes {
     LISPIS_UNDEF,
+    LISPIS_OP,
     LISPIS_INT32,
     LISPIS_SYM_IDX,
     LISPIS_USERP,
     LISPIS_CFUNC,
     LISPIS_LFUNC,
     LISPIS_CONS,
+    LISPIS_BOOLEAN,
 
 
 
@@ -73,10 +80,12 @@ typedef Bytecode Value;
 NanPackingTypes getType(Value v);
 int32 unpackInt(Value v);
 uint32 unpackSymbolID(Value v);
+bool unpackBoolean(Value v);
 void *unpackPointer(Value v, NanPackingTypes typeID);
 Value nanPack(uint32 val, uint32 typeID);
 Value nanPackInt32(int32 a);
 Value nanPackDouble(double d);
 Value nanPackSymbolIdx(uint32 s);
 Value nanPackPointer(void *p, uint32 typeID);
+Value nanPackBoolean(bool b);
 #endif

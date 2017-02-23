@@ -46,15 +46,18 @@ struct ActivationRecord {
     uint64 pc;
     ActivationRecord *caller; // 0 if called from C
     LispisFunction *function;
+    Env *enviroment;
 };
 
 struct LispisFunction {
     GcObjectHeader header;
-    Env *enviroment;
     uint32 *localToGlobalTable;
     uint32 localToGlobalTableSize;
     uint32 localToGlobalTableFilled;
     Bytecode *bytecode;
+    uint64 bytecodeSize;
+    LispisFunction **subFunctions;
+    uint64 subFunctionsLength;
 };
 
 struct LispisState;

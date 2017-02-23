@@ -17,23 +17,33 @@ int32 unpackInt(Value v) {
     return v.i32;
 }
 
+bool unpackBoolean(Value v) {
+    assert(getType(v) == LISPIS_BOOLEAN);
+    return (bool)v.ui32;
+}
+
 uint32 unpackSymbolID(Value v) {
     assert(getType(v) == LISPIS_SYM_IDX);
     return v.ui32;
 }
 
 void *unpackPointer(Value v, NanPackingTypes typeID) {
-    uint64 unpacked = v.ui64 & 0xFFFFFFFFFFFF;
+    uint64 unpacked = v.ui64 & 0xFFFFFFFFFFF;
     assert(getType(v) == typeID);
-    if (unpacked > 0x00007FFFFFFFFFFF) {
-        unpacked |= 0xFFFF000000000000;
-    }
+    // TODO: Do i need this?
+    //if (unpacked > 0x00008FFFFFFFFFFF) {
+    //unpacked |= 0xFFFF000000000000;
+    //}
     return (void *)unpacked;
 }
 
 
 CFunction *unpackCFunc(Value v) {
     return (CFunction *)unpackPointer(v, LISPIS_CFUNC);
+}
+
+ActivationRecord *unpackLFunc(Value v) {
+    return (ActivationRecord *)unpackPointer(v, LISPIS_LFUNC);
 }
 
 Value emptyList() {
@@ -133,7 +143,9 @@ Bytecode *loadSymbolSection(LispisState *state,
                             LispisFunction *func,
                             Bytecode *startBytecode) {
     Bytecode *bytecode = startBytecode;
-    while (bytecode->opCode != OP_EXIT) {
+    uint64 size = bytecode->ui64;
+    bytecode++;
+    for (uint64 i = 0; i < size; ++i) {
         int32 length = unpackInt(*bytecode);
         bytecode++;
         if (length) {
@@ -144,6 +156,8 @@ Bytecode *loadSymbolSection(LispisState *state,
             sym.length = length;
             loadLocalSymbolRaw(state, func, sym, id);
             bytecode = bytecode + length / 8 + (length % 8 == 0 ? 0 : 1);
+        } else {
+            assert(false);
         }
     }
     return bytecode;
@@ -180,7 +194,7 @@ Value cons(LispisState *state, Value ncar, Value ncdr) {
 typedef uint64 SymbolID;
 
 Value evalGlobalSymbol(Env *env, uint32 globalSymbolID) {
-    assert(env);
+    assert(env && "Variable undefined");
     uint32 variableID = globalSymbolID % env->variablesSize;
     uint32 startID = variableID;
     while (env->variables[variableID].symbolID != globalSymbolID) {
@@ -197,21 +211,30 @@ Value evalGlobalSymbol(Env *env, uint32 globalSymbolID) {
 }
 
 LispisFunction *loadFunction(LispisState *state,
-                             Env *parentEnv,
-                             Bytecode *bytecode) {
+                             Bytecode *startBytecode) {
+    Bytecode *bytecode = startBytecode;
     LispisFunction *ret =
         (LispisFunction *)calloc(1, sizeof(LispisFunction));
-    ret->enviroment =  (Env *)calloc(1, sizeof(Env));
-    ret->enviroment->parentEnv = parentEnv;
-    ret->enviroment->variablesSize = 256;
-    ret->enviroment->variables =
-        (Var *)calloc(1,
-                      sizeof(Var) *
-                      ret->enviroment->variablesSize);
     ret->localToGlobalTableSize = 64;
     ret->localToGlobalTable =
         (uint32 *)calloc(ret->localToGlobalTableSize, sizeof(uint32));
+    uint64 numSubFunctions = bytecode->ui64;
+    bytecode++;
+    if (numSubFunctions) {
+        ret->subFunctions =
+            (LispisFunction **)malloc(sizeof(LispisFunction *) *
+                                      numSubFunctions);
+    }
+    ret->subFunctionsLength = numSubFunctions;
+    for (uint64 i = 0; i < numSubFunctions; ++i) {
+        ret->subFunctions[i] = loadFunction(state,
+                                            bytecode);
+        bytecode =
+            ret->subFunctions[i]->bytecode +
+            ret->subFunctions[i]->bytecodeSize;
+    }
     bytecode = loadSymbolSection(state, ret, bytecode);
+    ret->bytecodeSize = bytecode->ui64;
     bytecode++;
     ret->bytecode = bytecode;
     return ret;
@@ -269,6 +292,10 @@ void printValue(SymbolTable *globalSymbolTable,
             CFunction *cfunc = unpackCFunc(v);
             printf("<#CFunction %p>\n", cfunc);
         } break;
+        case LISPIS_LFUNC: {
+            ActivationRecord *lfunc = unpackLFunc(v);
+            printf("<#Function %p>\n", lfunc);
+        } break;
             //case NAN_PACKING_LFUNC: {
             //} break;
         case LISPIS_UNDEF:
@@ -276,15 +303,43 @@ void printValue(SymbolTable *globalSymbolTable,
     }
 }
 
+ActivationRecord *allocActivationRecord(LispisState *state,
+                                        LispisFunction *func,
+                                        Env *parentEnv) {
+    ActivationRecord *record =
+        (ActivationRecord *)calloc(1, sizeof(ActivationRecord));
+    record->function = func;
+    record->enviroment =  (Env *)calloc(1, sizeof(Env));
+    record->enviroment->parentEnv = parentEnv;
+    record->enviroment->variablesSize = 256;
+    record->enviroment->variables =
+        (Var *)calloc(1,
+                      sizeof(Var) *
+                      record->enviroment->variablesSize);
+    return record;
+}
+
+ActivationRecord *copyActivationRecord(LispisState *state,
+                                       ActivationRecord *record) {
+    ActivationRecord *ret =
+        (ActivationRecord *)malloc(sizeof(ActivationRecord));
+    memcpy(ret, record, sizeof(ActivationRecord));
+    ret->header.refCount = 0;
+    return ret;
+}
+
 Value runFunction(LispisState *state, LispisFunction *func) {
     {
         ActivationRecord *record =
-            (ActivationRecord *)calloc(1, sizeof(ActivationRecord));
-        record->caller = state->currRecord;
+            allocActivationRecord(state, func, &state->globalEnviroment);
+        record->caller = 0;
         record->dataStackBottom = state->dataStackTop;
         state->currRecord = record;
     }
+ CALL:
+    func = state->currRecord->function;
     while(func->bytecode[state->currRecord->pc].opCode != OP_EXIT) {
+        assert(state->currRecord->pc < func->bytecodeSize);
         OpCodes op =
             func->bytecode[state->currRecord->pc].opCode;
         state->currRecord->pc++;
@@ -292,17 +347,28 @@ Value runFunction(LispisState *state, LispisFunction *func) {
             case OP_EVAL_SYMBOL: {
                 SymbolID id = unpackSymbolID(pop(state));
                 // FIXME: global variables
-                Value result = evalGlobalSymbol(func->enviroment, id);
+                Value result =
+                    evalGlobalSymbol(state->currRecord->enviroment, id);
                 push(state, result);
             } break;
             case OP_RETURN: {
                 Value ret = pop(state);
-                assert(state->dataStackTop == 0);
-                return ret;
+                state->dataStackTop =
+                    state->currRecord->dataStackBottom;
+                if (state->currRecord->caller) {
+                    push(state, ret);
+                    state->currRecord = state->currRecord->caller;
+                    func = state->currRecord->function;
+                } else {
+                    state->currRecord = 0;
+                    return ret;
+                }
             } break;
             case OP_PUSH: {
                 Value p;
                 p = func->bytecode[state->currRecord->pc];
+                // use OP_PUSH_TRANSLATE_SYMBOL
+                assert(getType(p) != LISPIS_SYM_IDX);
                 state->currRecord->pc++;
                 push(state, p);
             } break;
@@ -329,15 +395,19 @@ Value runFunction(LispisState *state, LispisFunction *func) {
                     func->bytecode[state->currRecord->pc].ui64;
                 state->currRecord->pc++;
                 Value callee = pop(state);
-                {
-                    ActivationRecord *record =
-                        (ActivationRecord *)calloc(1,
-                                                   sizeof(ActivationRecord));
-                    record->caller = state->currRecord;
-                    record->dataStackBottom = state->dataStackTop-numArgs;
-                    state->currRecord = record;
-                }
                 if (getType(callee) == LISPIS_CFUNC) {
+                    {
+
+                        ActivationRecord *record =
+                            allocActivationRecord(state,
+                                                  0,
+                                                  &state->globalEnviroment);
+                        record->caller = state->currRecord;
+                        record->dataStackBottom =
+                            state->dataStackTop-numArgs;
+                        record->function = 0;
+                        state->currRecord = record;
+                    }
                     CFunction *f = unpackCFunc(callee);
                     bool returned = f->func(state, numArgs);
                     if (returned) {
@@ -352,11 +422,55 @@ Value runFunction(LispisState *state, LispisFunction *func) {
                         state->currRecord = state->currRecord->caller;
                     }
                 } else if (getType(callee) == LISPIS_LFUNC) {
-                    //TODO
-                    assert(false);
+                    ActivationRecord *record = unpackLFunc(callee);
+                    record = copyActivationRecord(state, record);
+                    record->dataStackBottom = state->dataStackTop-numArgs;
+                    record->caller = state->currRecord;
+                    state->currRecord = record;
+                    push(state, nanPackInt32(numArgs));
+                    goto CALL;
                 } else {
                     assert(false);
                 }
+            } break;
+            case OP_PUSH_LAMBDA_ID: {
+                uint64 id = func->bytecode[state->currRecord->pc].ui64;
+                state->currRecord->pc++;
+                ActivationRecord *record =
+                    allocActivationRecord(state, func->subFunctions[id],
+                                          state->currRecord->enviroment);
+                push(state, nanPackPointer(record,
+                                           LISPIS_LFUNC));
+                push(state, nanPackPointer(unpackLFunc(pop(state)),
+                                                           LISPIS_LFUNC));
+                printf("PUSH LFUNC!\n");
+            } break;
+            case OP_POP_ASSERT_EQUAL: {
+                Value a = pop(state);
+                Value b = pop(state);
+                assert(a.ui64 == b.ui64);
+            } break;
+            case OP_SET_LOCAL_VARIABLE: {
+                uint32 symId = unpackSymbolID(pop(state));
+                Value v = pop(state);
+                setVariableRaw(state->currRecord->enviroment,
+                               v, symId);
+            } break;
+            case OP_CLEAR_STACK: {
+                state->dataStackTop = state->currRecord->dataStackBottom;
+            } break;
+            case OP_JUMP_IF_TRUE: {
+                bool pred = unpackBoolean(pop(state));
+                int64 target = func->bytecode[state->currRecord->pc].i64;
+                state->currRecord->pc++;
+                if (pred) {
+                    state->currRecord->pc += target;
+                }
+            } break;
+            case OP_JUMP: {
+                int64 target = func->bytecode[state->currRecord->pc].i64;
+                state->currRecord->pc++;
+                state->currRecord->pc += target;
             } break;
             default:assert(false);
         }
@@ -499,6 +613,29 @@ bool lispisDiv(LispisState *state, uint64 numArgs) {
     return true;
 }
 
+bool lispisLess(LispisState *state, uint64 numArgs) {
+    assert(numArgs == 2);
+    Value rh = pop(state);
+    Value lh = pop(state);
+    bool ret = false;
+    if (getType(rh) == LISPIS_DOUBLE && getType(lh) == LISPIS_DOUBLE) {
+        ret = lh.f64 < rh.f64;
+    } else if (getType(rh) == LISPIS_INT32 &&
+               getType(lh) == LISPIS_INT32) {
+        ret = unpackInt(lh) < unpackInt(rh);
+    } else if (getType(rh) == LISPIS_DOUBLE &&
+               getType(lh) == LISPIS_INT32) {
+        ret = unpackInt(lh) < rh.f64;
+    } else if (getType(rh) == LISPIS_INT32 &&
+               getType(lh) == LISPIS_DOUBLE) {
+        ret = lh.f64 < unpackInt(rh);
+    } else {
+        assert(false && "Comparison only works on ints and doubles");
+    }
+    push(state, nanPackBoolean(ret));
+    return true;
+}
+
 void dumpEnviroment(SymbolTable *globalSymbolTable,
                     LispisFunction *func,
                     Env *env) {
@@ -523,47 +660,53 @@ int main(int argsc, char **args) {
 
     // CompileTime
     quote.val = (char *)"quote";
-    quote.length = 5;
+    quote.length = strlen(quote.val);
     quoteSym.exprType = EXPR_SYMBOL;
     quoteSym.str = quote;
+    lambda.val = (char *)"lambda";
+    lambda.length = strlen(lambda.val);
+    let.val = (char *)"let!";
+    let.length = strlen(let.val);
+    ifSym.val = (char *)"if";
+    ifSym.length = strlen(ifSym.val);
     char *fileContent = readEntireFile((char *)"./test.lsp");
     Lexer lexer = {fileContent};
     eatToken(&lexer);
     Expr *parseTreeExpr = parseExpression(&lexer);
     printf("ParseTree:\n");
     dumpTree(parseTreeExpr, 0);
-    Expr *astExpr = firstPass(parseTreeExpr);
+    Expr *astExpr1 = quotePass(parseTreeExpr);
+    Expr *astExpr2 = lambdaPass(astExpr1);
+    dealloc(astExpr1);
+    astExpr1 = 0;
+    astExpr1 = letPass(astExpr2);
+    dealloc(astExpr2);
+    astExpr2 = 0;
+    astExpr2 = ifPass(astExpr1);
+    dealloc(astExpr1);
+    astExpr1 = 0;
+    Expr *astDone = astExpr2;
     printf("AST:\n");
-    dumpTree(astExpr, 0);
+    dumpTree(astDone, 0);
     CompilerState compiler = {};
     compiler.bytecodeSize = 256;
     compiler.symbolIndexMap.symbolsSize = 3;
     compiler.bytecode =
-        (Bytecode *)calloc(1, compiler.bytecodeSize * sizeof(Bytecode) +
-                           compiler.symbolIndexMap.symbolsSize *
-                           sizeof(SymIdBucket));
+        (Bytecode *)calloc(1, compiler.bytecodeSize * sizeof(Bytecode));
     compiler.symbolIndexMap.symbolMap =
-        (SymIdBucket *)(compiler.bytecode + compiler.bytecodeSize);
-    compileExpression(&compiler, astExpr);
+        (SymIdBucket *)calloc(1, 
+                              compiler.symbolIndexMap.symbolsSize *
+                              sizeof(SymIdBucket));
+    compileExpression(&compiler, astDone);
     compiler.symbolSectionSize = 256;
     compiler.symbolSection =
         (Bytecode *)calloc(compiler.symbolSectionSize,
                            sizeof(Bytecode));
     encodeSymbolSection(&compiler);
     pushOp(&compiler, OP_RETURN);
-    printf("\nSymbol section:\n");
-    dumpSymbolSection(compiler.symbolSection);
-    printf("\nBytecode section:\n");
-    dumpBytecode(compiler.bytecode);
+    dumpBytecode(&compiler);
 
-    Bytecode *bytecode = (Bytecode *)malloc(sizeof(Bytecode) *
-                                            compiler.bytecodeTop +
-                                            sizeof(Bytecode) *
-                                            compiler.symbolSectionTop);
-    memcpy(bytecode, compiler.symbolSection, (sizeof(Bytecode) *
-                                              compiler.symbolSectionTop));
-    memcpy(bytecode + compiler.symbolSectionTop,
-           compiler.bytecode, sizeof(uint64) * compiler.bytecodeTop);
+    Bytecode *bytecode = compactBytecode(&compiler);
     LispisState state = {};
     state.globalEnviroment.parentEnv = 0;
     state.globalSymbolTable.symbolsSize = 256;
@@ -611,17 +754,21 @@ int main(int argsc, char **args) {
     divSymbol.length = 1;
     bindFunction(&state, divSymbol, lispisDiv);
 
+    String lessSymbol;
+    lessSymbol.val = (char *)"<";
+    lessSymbol.length = 1;
+    bindFunction(&state, lessSymbol, lispisLess);
+
 
     // usage code!
 
 
     LispisFunction *entry = loadFunction(&state,
-                                         &state.globalEnviroment,
                                          bytecode);
-    printf("enviroment:\n");
-    dumpEnviroment(&state.globalSymbolTable,
-                   entry,
-                   entry->enviroment);
+    //printf("enviroment:\n");
+    //dumpEnviroment(&state.globalSymbolTable,
+    //entry,
+    //entry->enviroment);
 
     Value retVal = runFunction(&state, entry);
     printf("ret val:\n");
@@ -629,7 +776,8 @@ int main(int argsc, char **args) {
                entry,
                retVal);
     
-    dealloc(astExpr);
+    dealloc(astExpr2);
+    dealloc(astExpr1);
     dealloc(parseTreeExpr);
     return 0;
 }

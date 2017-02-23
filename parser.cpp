@@ -18,9 +18,9 @@ Expr *parseExpression(Lexer *lexer) {
             ret->callee = (Expr *)malloc(sizeof(Expr));
             *ret->callee = quoteSym;
             ret->callee->line = tok.line;
-            ret->params = (ExprList *)malloc(sizeof(ExprList));
-            ret->params->next = 0;
-            ret->params->val = parseExpression(lexer);
+            ret->arguments = (ExprList *)malloc(sizeof(ExprList));
+            ret->arguments->next = 0;
+            ret->arguments->val = parseExpression(lexer);
         } break;
         case TOK_SYMBOL: {
             ret->exprType = EXPR_SYMBOL;
@@ -39,7 +39,7 @@ Expr *parseExpression(Lexer *lexer) {
             } else {
                 ret->callee = 0;
             }
-            ret->params = 0;
+            ret->arguments = 0;
             ExprList *tail = 0;
             while (peekToken(lexer).tokenType != TOK_RPAREN) {
                 ExprList *paramNode =
@@ -50,7 +50,7 @@ Expr *parseExpression(Lexer *lexer) {
                     tail->next = paramNode;
                     tail = paramNode;
                 } else {
-                    ret->params = paramNode;
+                    ret->arguments = paramNode;
                     tail = paramNode;
                 }
             }

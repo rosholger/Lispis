@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cassert>
 #include <cstdio>
+#include <cstring>
 
 Value nanPackPointer(void *p, uint32 typeID) {
     double nan = NAN;
@@ -17,10 +18,9 @@ Value nanPackPointer(void *p, uint32 typeID) {
 }
 
 Value nanPack(uint32 val, uint32 typeID) {
-    double nan = NAN;
-    uint64 nanVal = (*(uint64 *)&nan) | (uint64)val | ((uint64)typeID << 47);
     Value ret;
-    ret.ui64 = nanVal;
+    ret.f64 = NAN;
+    ret.ui64 |= (uint64)val | ((uint64)typeID << 47);
     return ret;
 }
 
@@ -39,6 +39,10 @@ Value nanPackDouble(double d) {
     return ret;
 }
 
+Value nanPackBoolean(bool b) {
+    return nanPack(b, LISPIS_BOOLEAN);
+}
+
 void allocBytecode(CompilerState *state) {
     if (state->bytecodeTop == state->bytecodeSize) {
         state->bytecodeSize = state->bytecodeSize * 1.5f;
@@ -50,8 +54,20 @@ void allocBytecode(CompilerState *state) {
 
 void pushOp(CompilerState *state, OpCodes op) {
     allocBytecode(state);
-    state->bytecode[state->bytecodeTop].opCode = op;
+    state->bytecode[state->bytecodeTop] = nanPack(op, LISPIS_OP);
     state->bytecodeTop++;
+}
+
+uint64 pushDummy(CompilerState *state) {
+    allocBytecode(state);
+    state->bytecode[state->bytecodeTop] = nanPack(0, LISPIS_UNDEF);
+    uint64 ret = state->bytecodeTop;
+    state->bytecodeTop++;
+    return ret;
+}
+
+void pushUndef(CompilerState *state) {
+    pushDummy(state);
 }
 
 void pushUint64(CompilerState *state, uint64 u) {
@@ -59,7 +75,6 @@ void pushUint64(CompilerState *state, uint64 u) {
     state->bytecode[state->bytecodeTop].ui64 = u;
     state->bytecodeTop++;
 }
-
 
 void pushDouble(CompilerState *state, double d) {
     allocBytecode(state);
@@ -69,6 +84,11 @@ void pushDouble(CompilerState *state, double d) {
 
 void pushInt32(CompilerState *state, int32 a) {
     pushDouble(state, nanPackInt32(a).f64);
+}
+
+void set(CompilerState *state, Value v, uint64 pos) {
+    assert(pos < state->bytecodeTop);
+    state->bytecode[pos] = v;
 }
 
 uint32 getSymbolIndex(CompilerState *state, String str) {
@@ -131,7 +151,7 @@ void compileQuotedExpr(CompilerState *state, Expr *expr) {
             compileQuotedList(state, expr->list);
         } break;
         case EXPR_SYMBOL: {
-            pushOp(state, OP_PUSH);
+            pushOp(state, OP_PUSH_TRANSLATE_SYMBOL);
             pushSymbol(state, expr->str);
         } break;
         default: {
@@ -151,7 +171,77 @@ void compileQuotedList(CompilerState *state, ExprList *exprList) {
     pushOp(state, OP_LIST);
 }
 
+CompilerState *startNewLambda(CompilerState *state) {
+    state->childStatesLength++;
+    if (state->childStates) {
+        state->childStates =
+            (CompilerState *)realloc(state->childStates,
+                                     sizeof(CompilerState) *
+                                     state->childStatesLength);
+    } else {
+        state->childStates =
+            (CompilerState *)malloc(sizeof(CompilerState) *
+                                    state->childStatesLength);
+    } 
+    CompilerState *ret = state->childStates + state->childStatesLength-1;
+    ret->symbolSectionTop = 0;
+    ret->symbolSectionSize = 8;
+    ret->bytecodeTop = 0;
+    ret->bytecodeSize = 16;
+    ret->symbolSection = (Bytecode *)malloc(sizeof(Bytecode) *
+                                            ret->symbolSectionSize);
+    ret->bytecode = (Bytecode *)malloc(sizeof(Bytecode) *
+                                       ret->bytecodeSize);
+    ret->symbolIndexMap.symbolsSize = 16;
+    ret->symbolIndexMap.symbolsFilled = 0;
+    ret->symbolIndexMap.nextSymbolId = 0;
+    ret->symbolIndexMap.symbolMap =
+        (SymIdBucket *)calloc(ret->symbolIndexMap.symbolsSize,
+                              sizeof(SymIdBucket));
+    ret->childStates = 0;
+    ret->childStatesLength = 0;
+    return ret;
+}
+
+void compileLambdaParamsRec(CompilerState *state, ExprList *params) {
+    if (params->next) {
+        compileLambdaParamsRec(state, params->next);
+    }
+    assert(params->val->exprType == EXPR_SYMBOL);
+    pushOp(state, OP_PUSH_TRANSLATE_SYMBOL);
+    pushSymbol(state, params->val->str);
+    pushOp(state, OP_SET_LOCAL_VARIABLE);
+}
+
+void compileLambdaParams(CompilerState *state, ExprList *params,
+                         int32 paramsCount) {
+    pushOp(state, OP_PUSH);
+    pushInt32(state, paramsCount);
+    pushOp(state, OP_POP_ASSERT_EQUAL);
+    if (params) {
+        compileLambdaParamsRec(state, params);
+    }
+}
+
+void compileLambdaBody(CompilerState *state, ExprList *body) {
+    for (ExprList *exprElem = body; exprElem; exprElem = exprElem->next) {
+        compileExpression(state, exprElem->val);
+        if (exprElem->next) {
+            pushOp(state, OP_CLEAR_STACK);
+        }
+    }
+    pushOp(state, OP_RETURN);
+    pushOp(state, OP_EXIT);
+}
+
+int64 calcRelativeJumpToTop(CompilerState *state, uint64 jumpFrom) {
+    assert(((int64)state->bytecodeTop));
+    return (((int64)state->bytecodeTop)-1) - ((int64)jumpFrom);
+    // -1 since we advance the pc to
+}
+
 void compileExpression(CompilerState *state, Expr *expr) {
+    assert(expr);
     switch (expr->exprType) {
         case EXPR_QUOTE: {
             compileQuotedExpr(state, expr->quoted);
@@ -174,7 +264,7 @@ void compileExpression(CompilerState *state, Expr *expr) {
         } break;
         case EXPR_CALL: {
             uint64 numArgs = 0;
-            for (ExprList *param = expr->params;
+            for (ExprList *param = expr->arguments;
                  param; param = param->next) {
                 compileExpression(state, param->val);
                 numArgs++;
@@ -182,6 +272,47 @@ void compileExpression(CompilerState *state, Expr *expr) {
             compileExpression(state, expr->callee);
             pushOp(state, OP_CALL);
             pushUint64(state, numArgs);
+        } break;
+        case EXPR_LAMBDA: {
+            //TODO varargs
+            pushOp(state, OP_PUSH_LAMBDA_ID);
+            pushUint64(state, state->childStatesLength);
+            CompilerState *newFuncState = startNewLambda(state);
+            compileLambdaParams(newFuncState, expr->params,
+                                expr->paramsCount);
+            compileLambdaBody(newFuncState, expr->body);
+            encodeSymbolSection(newFuncState);
+        } break;
+        case EXPR_LET: {
+            compileExpression(state, expr->value);
+            pushOp(state, OP_PUSH_TRANSLATE_SYMBOL);
+            pushSymbol(state, expr->variable->str);
+            pushOp(state, OP_SET_LOCAL_VARIABLE);
+            // make let! return the value, prob. pretty slow...
+            compileExpression(state, expr->variable);
+        } break;
+        case EXPR_IF: {
+            compileExpression(state, expr->predicate);
+            pushOp(state, OP_JUMP_IF_TRUE);
+            uint64 trueTargetIdLoc = pushDummy(state);
+            if (expr->falseBranch) {
+                compileExpression(state, expr->falseBranch);
+            } else {
+                pushOp(state, OP_PUSH);
+                pushUndef(state);
+            }
+            pushOp(state, OP_JUMP);
+            uint64 afterTrueTargetIdLoc = pushDummy(state);
+            Value trueRelTarget;
+            trueRelTarget.i64 =
+                calcRelativeJumpToTop(state, trueTargetIdLoc);
+            set(state, trueRelTarget, trueTargetIdLoc);
+            compileExpression(state, expr->trueBranch);
+            Value afterTrueRelTarget;
+            afterTrueRelTarget.i64 =
+                calcRelativeJumpToTop(state, afterTrueTargetIdLoc);
+            set(state, afterTrueRelTarget, afterTrueTargetIdLoc);
+
         } break;
         default:assert(false);
     }
@@ -191,17 +322,6 @@ void compileFunctionBody(CompilerState *state, ExprList *body) {
     for (ExprList *expr = body; expr; expr = expr->next) {
         compileExpression(state, expr->val);
     }
-}
-
-void compileFunction(CompilerState *state, Function *func) {
-    for (ExprList *param = func->params;
-         param; param = param->next) {
-        pushOp(state, OP_PUSH);
-        pushSymbol(state, param->val->str);
-        pushOp(state, OP_SET_LOCAL_SYMBOL);
-    }
-    compileFunctionBody(state, func->body);
-    pushOp(state, OP_RETURN);
 }
 
 void allocSymbolSection(CompilerState *state) {
@@ -242,7 +362,53 @@ void encodeSymbolSection(CompilerState *compiler) {
             }
         }
     }
-    allocSymbolSection(compiler);
-    compiler->symbolSection[compiler->symbolSectionTop] = nanPackInt32(0);
-    compiler->symbolSectionTop++;
+}
+
+uint64 totalBytecodeSize(CompilerState *state) {
+    uint64 ret = 0;
+    for (int i = 0; i < state->childStatesLength; ++i) {
+        ret += totalBytecodeSize(state->childStates + i);
+    }
+    ret += state->symbolSectionTop;
+    ret += state->bytecodeTop;
+    ret += 3;
+    return ret;
+}
+
+void compactBytecodeInternal(CompilerState *state,
+                                  Bytecode *bytecode) {
+    uint64 numSubFuncs = state->childStatesLength;
+    memcpy(bytecode, &numSubFuncs, sizeof(uint64));
+    bytecode++;
+    for (int i = 0; i < state->childStatesLength; ++i) {
+        compactBytecodeInternal(state->childStates + i,
+                                bytecode);
+        bytecode += totalBytecodeSize(state->childStates + i);
+    }
+    uint64 numSymbols = state->symbolIndexMap.symbolsFilled;
+    printf("num symbols %llu\n", numSymbols);
+    memcpy(bytecode,
+           &numSymbols,
+           sizeof(numSymbols));
+    bytecode++;
+    memcpy(bytecode,
+           state->symbolSection,
+           state->symbolSectionTop * sizeof(Bytecode));
+    bytecode += state->symbolSectionTop;
+    uint64 bytecodeSize = state->bytecodeTop;
+    printf("bytecodeSize %llu\n", bytecodeSize);
+    memcpy(bytecode,
+           &bytecodeSize,
+           sizeof(bytecodeSize));
+    bytecode++;
+    memcpy(bytecode,
+           state->bytecode,
+           state->bytecodeTop * sizeof(Bytecode));
+}
+
+Bytecode *compactBytecode(CompilerState *state) {
+    Bytecode *ret = (Bytecode *)malloc(sizeof(Bytecode) *
+                                       totalBytecodeSize(state));
+    compactBytecodeInternal(state, ret);
+    return ret;
 }
