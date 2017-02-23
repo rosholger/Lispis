@@ -10,18 +10,16 @@ struct GcObjectHeader {
 
 struct Symbol {
     String symbol;
-    uint64 hash;
-    uint32 localSymbolID;
+    uint64 hash; // Do i need this?
     uint32 globalSymbolID;
     bool filled;
 };
 
-// Split me?
 struct SymbolTable {
     Symbol *symbols;
     uint64 symbolsSize;
     uint64 symbolsInterned;
-    SymbolTable *parentSymbolTable;
+    uint32 nextGlobalSymbolID;
 };
 
 struct Var {
@@ -51,11 +49,9 @@ struct ActivationRecord {
 
 struct LispisFunction {
     GcObjectHeader header;
-    uint32 *localToGlobalTable;
-    uint32 localToGlobalTableSize;
-    uint32 localToGlobalTableFilled;
     Bytecode *bytecode;
     uint64 bytecodeSize;
+    uint64 bytecodeTop; // used while compiling only
     LispisFunction **subFunctions;
     uint64 subFunctionsLength;
 };
@@ -78,11 +74,12 @@ struct Pair {
 struct LispisState {
     Env globalEnviroment;
     SymbolTable globalSymbolTable;
-    uint32 nextGlobalSymbolID;
     ActivationRecord *currRecord;
     Value *dataStack;
     uint32 dataStackSize;
     uint32 dataStackTop;
 };
+
+uint32 internSymbol(LispisState *state, String symbol, uint64 symHash);
 
 #endif

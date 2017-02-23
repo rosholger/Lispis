@@ -43,135 +43,104 @@ Value nanPackBoolean(bool b) {
     return nanPack(b, LISPIS_BOOLEAN);
 }
 
-void allocBytecode(CompilerState *state) {
-    if (state->bytecodeTop == state->bytecodeSize) {
-        state->bytecodeSize = state->bytecodeSize * 1.5f;
-        state->bytecode = (Bytecode *)realloc(state->bytecode,
-                                              sizeof(Bytecode) *
-                                              state->bytecodeSize);
+void allocBytecode(LispisState *state, LispisFunction *func) {
+    if (func->bytecodeTop == func->bytecodeSize) {
+        func->bytecodeSize = func->bytecodeSize * 1.5f;
+        func->bytecode = (Bytecode *)realloc(func->bytecode,
+                                             sizeof(Bytecode) *
+                                             func->bytecodeSize);
     }
 }
 
-void pushOp(CompilerState *state, OpCodes op) {
-    allocBytecode(state);
-    state->bytecode[state->bytecodeTop] = nanPack(op, LISPIS_OP);
-    state->bytecodeTop++;
+void pushOp(LispisState *state, LispisFunction *func, OpCodes op) {
+    allocBytecode(state, func);
+    func->bytecode[func->bytecodeTop] = nanPack(op, LISPIS_OP);
+    func->bytecodeTop++;
 }
 
-uint64 pushDummy(CompilerState *state) {
-    allocBytecode(state);
-    state->bytecode[state->bytecodeTop] = nanPack(0, LISPIS_UNDEF);
-    uint64 ret = state->bytecodeTop;
-    state->bytecodeTop++;
+uint64 pushDummy(LispisState *state, LispisFunction *func) {
+    allocBytecode(state, func);
+    func->bytecode[func->bytecodeTop] = nanPack(0, LISPIS_UNDEF);
+    uint64 ret = func->bytecodeTop;
+    func->bytecodeTop++;
     return ret;
 }
 
-void pushUndef(CompilerState *state) {
-    pushDummy(state);
+void pushUndef(LispisState *state, LispisFunction *func) {
+    pushDummy(state, func);
 }
 
-void pushUint64(CompilerState *state, uint64 u) {
-    allocBytecode(state);
-    state->bytecode[state->bytecodeTop].ui64 = u;
-    state->bytecodeTop++;
+void pushUint64(LispisState *state, LispisFunction *func, uint64 u) {
+    allocBytecode(state, func);
+    func->bytecode[func->bytecodeTop].ui64 = u;
+    func->bytecodeTop++;
 }
 
-void pushDouble(CompilerState *state, double d) {
-    allocBytecode(state);
-    state->bytecode[state->bytecodeTop].f64 = d;
-    state->bytecodeTop++;
+void pushDouble(LispisState *state, LispisFunction *func, double d) {
+    allocBytecode(state, func);
+    func->bytecode[func->bytecodeTop].f64 = d;
+    func->bytecodeTop++;
 }
 
-void pushInt32(CompilerState *state, int32 a) {
-    pushDouble(state, nanPackInt32(a).f64);
+void pushInt32(LispisState *state, LispisFunction *func, int32 a) {
+    pushDouble(state, func, nanPackInt32(a).f64);
 }
 
-void set(CompilerState *state, Value v, uint64 pos) {
-    assert(pos < state->bytecodeTop);
-    state->bytecode[pos] = v;
+void set(LispisState *state, LispisFunction *func, Value v, uint64 pos) {
+    assert(pos < func->bytecodeTop);
+    func->bytecode[pos] = v;
 }
 
-uint32 getSymbolIndex(CompilerState *state, String str) {
-    SymbolIndexMap *map = &state->symbolIndexMap;
-    if (map->symbolsFilled >
-        map->symbolsSize*0.7) {
-        uint64 oldSize = map->symbolsSize;
-        SymIdBucket *oldBuckets = map->symbolMap;
-        map->symbolsSize *= 1.5f;
-        map->symbolMap = (SymIdBucket *)calloc(map->symbolsSize,
-                                               sizeof(SymIdBucket));
-        for (uint64 i = 0; i < oldSize; ++i) {
-            if (oldBuckets[i].filled) {
-                uint64 hash = hashFunc(oldBuckets[i].symbol);
-                uint64 id = hash % map->symbolsSize;
-                while (map->symbolMap[id].filled) {
-                    id++;
-                    id = id % map->symbolsSize;
-                }
-                map->symbolMap[id] = oldBuckets[i];
-            }
-        }
-        free(oldBuckets);
-    }
-    uint64 symHash = hashFunc(str);
-    uint64 symMapIndex = symHash % map->symbolsSize;
-    while (map->symbolMap[symMapIndex].filled) {
-        if (symCmp(str, symHash,
-                   map->symbolMap[symMapIndex].symbol,
-                   hashFunc(map->symbolMap[symMapIndex].symbol))) {
-            break;
-        }
-        symMapIndex++;
-        symMapIndex = symMapIndex % map->symbolsSize;
-    }
-    uint32 id = 0;
-    if (map->symbolMap[symMapIndex].filled) {
-        id = map->symbolMap[symMapIndex].symbolId;
-    } else {
-        map->symbolMap[symMapIndex].symbol = str;
-        map->symbolMap[symMapIndex].filled = true;
-        id = map->nextSymbolId;
-        map->symbolMap[symMapIndex].symbolId = id;
-        map->nextSymbolId++;
-        map->symbolsFilled++;
-    }
-    return id;
+void pushSymbol(LispisState *state, LispisFunction *func, String str) {
+    uint32 symbolIdx = internSymbol(state, str, hashFunc(str));
+    pushDouble(state, func, nanPackSymbolIdx(symbolIdx).f64);
 }
 
-void pushSymbol(CompilerState *state, String str) {
-    uint32 symbolIdx = getSymbolIndex(state, str);
-    pushDouble(state, nanPackSymbolIdx(symbolIdx).f64);
-}
+void compileQuotedList(LispisState *state, LispisFunction *func, ExprList *exprList);
 
-void compileQuotedList(CompilerState *state, ExprList *exprList);
-
-void compileQuotedExpr(CompilerState *state, Expr *expr) {
+void compileQuotedExpr(LispisState *state, LispisFunction *func, Expr *expr) {
     switch (expr->exprType) {
         case EXPR_LIST: {
-            compileQuotedList(state, expr->list);
+            compileQuotedList(state, func, expr->list);
         } break;
         case EXPR_SYMBOL: {
-            pushOp(state, OP_PUSH_TRANSLATE_SYMBOL);
-            pushSymbol(state, expr->str);
+            pushOp(state, func, OP_PUSH);
+            pushSymbol(state, func, expr->str);
         } break;
         default: {
-            compileExpression(state, expr);
+            compileExpression(state, func, expr);
         } break;
     }
 }
 
-void compileQuotedList(CompilerState *state, ExprList *exprList) {
+void compileQuotedList(LispisState *state, LispisFunction *func, ExprList *exprList) {
     int32 numElems = 0;
     for (ExprList *head = exprList; head; head = head->next) {
         numElems++;
-        compileQuotedExpr(state, head->val);
+        compileQuotedExpr(state, func, head->val);
     }
-    pushOp(state, OP_PUSH);
-    pushInt32(state, numElems);
-    pushOp(state, OP_LIST);
+    pushOp(state, func, OP_PUSH);
+    pushInt32(state, func, numElems);
+    pushOp(state, func, OP_LIST);
 }
 
-CompilerState *startNewLambda(CompilerState *state) {
+LispisFunction *startNewLambda(LispisState *state, LispisFunction *func) {
+// Created a new CompilerState... what to do
+    func->subFunctionsLength++;
+    func->subFunctions =
+        (LispisFunction **)realloc(func->subFunctions,
+                                   func->subFunctionsLength);
+    LispisFunction *ret =
+        (LispisFunction *)calloc(1, sizeof(LispisFunction));
+    //ret->localToGlobalTableSize = 64;
+    //ret->localToGlobalTable =
+    //(uint32 *)calloc(ret->localToGlobalTableSize, sizeof(uint32));
+    ret->bytecodeSize = 16;
+    ret->bytecode =
+        (Bytecode *)calloc(1, ret->bytecodeSize * sizeof(Bytecode));
+    func->subFunctions[func->subFunctionsLength-1] = ret;
+    return ret;
+#if 0
     state->childStatesLength++;
     if (state->childStates) {
         state->childStates =
@@ -201,129 +170,127 @@ CompilerState *startNewLambda(CompilerState *state) {
     ret->childStates = 0;
     ret->childStatesLength = 0;
     return ret;
+#endif
+    return 0;
 }
 
-void compileLambdaParamsRec(CompilerState *state, ExprList *params) {
+void compileLambdaParamsRec(LispisState *state, LispisFunction *func, ExprList *params) {
     if (params->next) {
-        compileLambdaParamsRec(state, params->next);
+        compileLambdaParamsRec(state, func, params->next);
     }
     assert(params->val->exprType == EXPR_SYMBOL);
-    pushOp(state, OP_PUSH_TRANSLATE_SYMBOL);
-    pushSymbol(state, params->val->str);
-    pushOp(state, OP_SET_LOCAL_VARIABLE);
+    pushOp(state, func, OP_PUSH);
+    pushSymbol(state, func, params->val->str);
+    pushOp(state, func, OP_SET_LOCAL_VARIABLE);
 }
 
-void compileLambdaParams(CompilerState *state, ExprList *params,
+void compileLambdaParams(LispisState *state, LispisFunction *func, ExprList *params,
                          int32 paramsCount) {
-    pushOp(state, OP_PUSH);
-    pushInt32(state, paramsCount);
-    pushOp(state, OP_POP_ASSERT_EQUAL);
+    pushOp(state, func, OP_PUSH);
+    pushInt32(state, func, paramsCount);
+    pushOp(state, func, OP_POP_ASSERT_EQUAL);
     if (params) {
-        compileLambdaParamsRec(state, params);
+        compileLambdaParamsRec(state, func, params);
     }
 }
 
-void compileLambdaBody(CompilerState *state, ExprList *body) {
+void compileLambdaBody(LispisState *state, LispisFunction *func, ExprList *body) {
     for (ExprList *exprElem = body; exprElem; exprElem = exprElem->next) {
-        compileExpression(state, exprElem->val);
+        compileExpression(state, func, exprElem->val);
         if (exprElem->next) {
-            pushOp(state, OP_CLEAR_STACK);
+            pushOp(state, func, OP_CLEAR_STACK);
         }
     }
-    pushOp(state, OP_RETURN);
-    pushOp(state, OP_EXIT);
+    pushOp(state, func, OP_RETURN);
+    pushOp(state, func, OP_EXIT);
 }
 
-int64 calcRelativeJumpToTop(CompilerState *state, uint64 jumpFrom) {
-    assert(((int64)state->bytecodeTop));
-    return (((int64)state->bytecodeTop)-1) - ((int64)jumpFrom);
+int64 calcRelativeJumpToTop(LispisState *state, LispisFunction *func, uint64 jumpFrom) {
+    assert(((int64)func->bytecodeTop));
+    return (((int64)func->bytecodeTop)-1) - ((int64)jumpFrom);
     // -1 since we advance the pc to
 }
 
-void compileExpression(CompilerState *state, Expr *expr) {
+void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
     assert(expr);
     switch (expr->exprType) {
         case EXPR_QUOTE: {
-            compileQuotedExpr(state, expr->quoted);
+            compileQuotedExpr(state, func, expr->quoted);
         } break;
         //case EXPR_STRING: {
         //printf("\"%.*s\"", node->strLen, node->str);
         //} break;
         case EXPR_INT: {
-            pushOp(state, OP_PUSH);
-            pushInt32(state, expr->intVal);
+            pushOp(state, func, OP_PUSH);
+            pushInt32(state, func, expr->intVal);
         } break;
         case EXPR_FLOAT: {
-            pushOp(state, OP_PUSH);
-            pushDouble(state, expr->floatVal);
+            pushOp(state, func, OP_PUSH);
+            pushDouble(state, func, expr->floatVal);
         } break;
         case EXPR_SYMBOL: {
-            pushOp(state, OP_PUSH_TRANSLATE_SYMBOL);
-            pushSymbol(state, expr->str);
-            pushOp(state, OP_EVAL_SYMBOL);
+            pushOp(state, func, OP_PUSH);
+            pushSymbol(state, func, expr->str);
+            pushOp(state, func, OP_EVAL_SYMBOL);
         } break;
         case EXPR_CALL: {
             uint64 numArgs = 0;
             for (ExprList *param = expr->arguments;
                  param; param = param->next) {
-                compileExpression(state, param->val);
+                compileExpression(state, func, param->val);
                 numArgs++;
             }
-            compileExpression(state, expr->callee);
-            pushOp(state, OP_CALL);
-            pushUint64(state, numArgs);
+            compileExpression(state, func, expr->callee);
+            pushOp(state, func, OP_CALL);
+            pushUint64(state, func, numArgs);
         } break;
         case EXPR_LAMBDA: {
             //TODO varargs
-            pushOp(state, OP_PUSH_LAMBDA_ID);
-            pushUint64(state, state->childStatesLength);
-            CompilerState *newFuncState = startNewLambda(state);
-            compileLambdaParams(newFuncState, expr->params,
+            pushOp(state, func, OP_PUSH_LAMBDA_ID);
+            // FIX
+            pushUint64(state, func, func->subFunctionsLength);
+            LispisFunction *newFunc = startNewLambda(state, func);
+            compileLambdaParams(state, newFunc, expr->params,
                                 expr->paramsCount);
-            compileLambdaBody(newFuncState, expr->body);
-            encodeSymbolSection(newFuncState);
+            compileLambdaBody(state, newFunc, expr->body);
+            //encodeSymbolSection(state, newFunc);
         } break;
         case EXPR_LET: {
-            compileExpression(state, expr->value);
-            pushOp(state, OP_PUSH_TRANSLATE_SYMBOL);
-            pushSymbol(state, expr->variable->str);
-            pushOp(state, OP_SET_LOCAL_VARIABLE);
-            // make let! return the value, prob. pretty slow...
-            compileExpression(state, expr->variable);
+            compileExpression(state, func, expr->value);
+            pushOp(state, func, OP_PUSH);
+            pushSymbol(state, func, expr->variable->str);
+            pushOp(state, func, OP_SET_LOCAL_VARIABLE);
+            // makes let! return the value, prob. pretty slow...
+            compileExpression(state, func, expr->variable);
         } break;
         case EXPR_IF: {
-            compileExpression(state, expr->predicate);
-            pushOp(state, OP_JUMP_IF_TRUE);
-            uint64 trueTargetIdLoc = pushDummy(state);
+            compileExpression(state, func, expr->predicate);
+            pushOp(state, func, OP_JUMP_IF_TRUE);
+            uint64 trueTargetIdLoc = pushDummy(state, func);
             if (expr->falseBranch) {
-                compileExpression(state, expr->falseBranch);
+                compileExpression(state, func, expr->falseBranch);
             } else {
-                pushOp(state, OP_PUSH);
-                pushUndef(state);
+                pushOp(state, func, OP_PUSH);
+                pushUndef(state, func);
             }
-            pushOp(state, OP_JUMP);
-            uint64 afterTrueTargetIdLoc = pushDummy(state);
+            pushOp(state, func, OP_JUMP);
+            uint64 afterTrueTargetIdLoc = pushDummy(state, func);
             Value trueRelTarget;
             trueRelTarget.i64 =
-                calcRelativeJumpToTop(state, trueTargetIdLoc);
-            set(state, trueRelTarget, trueTargetIdLoc);
-            compileExpression(state, expr->trueBranch);
+                calcRelativeJumpToTop(state, func, trueTargetIdLoc);
+            set(state, func, trueRelTarget, trueTargetIdLoc);
+            compileExpression(state, func, expr->trueBranch);
             Value afterTrueRelTarget;
             afterTrueRelTarget.i64 =
-                calcRelativeJumpToTop(state, afterTrueTargetIdLoc);
-            set(state, afterTrueRelTarget, afterTrueTargetIdLoc);
+                calcRelativeJumpToTop(state, func, afterTrueTargetIdLoc);
+            set(state, func, afterTrueRelTarget, afterTrueTargetIdLoc);
 
         } break;
         default:assert(false);
     }
 }
 
-void compileFunctionBody(CompilerState *state, ExprList *body) {
-    for (ExprList *expr = body; expr; expr = expr->next) {
-        compileExpression(state, expr->val);
-    }
-}
-
+#if 0
 void allocSymbolSection(CompilerState *state) {
     if (state->symbolSectionTop == state->symbolSectionSize) {
         state->symbolSectionSize = state->symbolSectionSize * 1.5f;
@@ -333,7 +300,8 @@ void allocSymbolSection(CompilerState *state) {
     }
 }
 
-void encodeSymbolSection(CompilerState *compiler) {
+// TODO replace with better stuff
+void encodeSymbolSection(LispisState *state, LispisFunction *func) {
     SymbolIndexMap *map = &compiler->symbolIndexMap;
     for (uint64 i = 0; i < map->symbolsSize; ++i) {
         if (map->symbolMap[i].filled) {
@@ -370,7 +338,7 @@ uint64 totalBytecodeSize(CompilerState *state) {
         ret += totalBytecodeSize(state->childStates + i);
     }
     ret += state->symbolSectionTop;
-    ret += state->bytecodeTop;
+    ret += func->bytecodeTop;
     ret += 3;
     return ret;
 }
@@ -395,15 +363,15 @@ void compactBytecodeInternal(CompilerState *state,
            state->symbolSection,
            state->symbolSectionTop * sizeof(Bytecode));
     bytecode += state->symbolSectionTop;
-    uint64 bytecodeSize = state->bytecodeTop;
+    uint64 bytecodeSize = func->bytecodeTop;
     printf("bytecodeSize %llu\n", bytecodeSize);
     memcpy(bytecode,
            &bytecodeSize,
            sizeof(bytecodeSize));
     bytecode++;
     memcpy(bytecode,
-           state->bytecode,
-           state->bytecodeTop * sizeof(Bytecode));
+           func->bytecode,
+           func->bytecodeTop * sizeof(Bytecode));
 }
 
 Bytecode *compactBytecode(CompilerState *state) {
@@ -412,3 +380,4 @@ Bytecode *compactBytecode(CompilerState *state) {
     compactBytecodeInternal(state, ret);
     return ret;
 }
+#endif

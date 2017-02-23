@@ -14,7 +14,6 @@ struct String {
 enum OpCodes {
     OP_EXIT,
     OP_PUSH,
-    OP_PUSH_TRANSLATE_SYMBOL,
     OP_SET_LOCAL_VARIABLE,
     OP_CALL,
     OP_RETURN,
@@ -50,10 +49,12 @@ union Bytecode {
 };
 
 struct Expr;
-struct CompilerState;
+struct LispisState;
+struct LispisFunction;
 void dumpTree(Expr *node, int identLevel);
-void dumpSymbolSection(CompilerState *state);
-void dumpBytecode(CompilerState *state);
+void dumpSymbolSection(LispisState *state,
+                       LispisFunction *func);
+void dumpBytecode(LispisState *state, LispisFunction *func);
 void dealloc(Expr *expr);
 char *readEntireFile(char *filename);
 bool symCmp(String a, uint64 hashA, String b, uint64 hashB);

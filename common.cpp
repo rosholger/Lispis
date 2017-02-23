@@ -107,43 +107,26 @@ void dumpTree(Expr *node, int identLevel) {
     }
 }
 
-void dumpSymbolSection(CompilerState *state) {
-    for (uint64 pc = 0; pc < state->symbolSectionTop;) {
-        int32 length = unpackInt(state->symbolSection[pc]);
-        pc++;
-        if (length) {
-            uint32 id = unpackSymbolID(state->symbolSection[pc]);
-            ++pc;
-            printf("SYMBOL: %u %.*s\n", id, (int)length,
-                   state->symbolSection[pc].c);
-            pc = pc + length / 8 + (length % 8 == 0 ? 0 : 1);
-        } else {
-            break;
-        }
+void dumpBytecode(LispisState *state, LispisFunction *func) {
+    // TODO reimplement
+    for (uint64 i = 0; i < func->subFunctionsLength; ++i) {
+        printf("LAMBDA_ID %llu\n", i);
+        dumpBytecode(state, func->subFunctions[i]);
+        printf("END_LAMBDA_ID %llu\n\n", i);
     }
-}
-
-void dumpBytecode(CompilerState *state) {
-    for (int i = 0; i < state->childStatesLength; ++i) {
-        printf("LAMBDA_ID %d\n", i);
-        dumpBytecode(state->childStates + i);
-    }
-    printf("Symbol Section:\n");
-    dumpSymbolSection(state);
-    printf("Bytecode Section:\n");
     uint64 pc;
-    for (pc = 0; state->bytecode[pc].opCode != OP_EXIT; pc++) {
-        assert(pc < state->bytecodeTop);
-        OpCodes op = state->bytecode[pc].opCode;
+    for (pc = 0; func->bytecode[pc].opCode != OP_EXIT; pc++) {
+        assert(pc < func->bytecodeTop);
+        OpCodes op = func->bytecode[pc].opCode;
         switch (op) {
             case OP_JUMP_IF_TRUE: {
                 pc++;
-                int64 relativeTarget = state->bytecode[pc].i64;
+                int64 relativeTarget = func->bytecode[pc].i64;
                 printf("JUMP_IF_TRUE %lld\n", relativeTarget);
             } break;
             case OP_JUMP: {
                 pc++;
-                int64 relativeTarget = state->bytecode[pc].i64;
+                int64 relativeTarget = func->bytecode[pc].i64;
                 printf("JUMP %lld\n", relativeTarget);
             } break;
             case OP_POP_ASSERT_EQUAL: {
@@ -161,29 +144,27 @@ void dumpBytecode(CompilerState *state) {
             case OP_PUSH: {
                 printf("PUSH ");
                 pc++;
-                switch (getType(state->bytecode[pc])) {
+                switch (getType(func->bytecode[pc])) {
                     case LISPIS_INT32: {
                         printf("int: %d\n",
-                               unpackInt(state->bytecode[pc]));
+                               unpackInt(func->bytecode[pc]));
                     } break;
                     case LISPIS_DOUBLE: {
-                        printf("double: %f\n", state->bytecode[pc].f64);
+                        printf("double: %f\n", func->bytecode[pc].f64);
+                    } break;
+                    case LISPIS_SYM_IDX: {
+                        printf("symbol index: %u\n",
+                               unpackSymbolID(func->bytecode[pc]));
                     } break;
                     default:assert(false);
                 }
-            } break;
-            case OP_PUSH_TRANSLATE_SYMBOL: {
-                pc++;
-                printf("PUSH_TRANSLATE_SYMBOL ");
-                printf("symbol index: %u\n",
-                       unpackSymbolID(state->bytecode[pc]));
             } break;
             case OP_SET_LOCAL_VARIABLE: {
                 printf("SET_LOCAL_VARIABLE\n");
             } break;
             case OP_CALL: {
                 pc++;
-                uint64 numArgs = state->bytecode[pc].ui64;
+                uint64 numArgs = func->bytecode[pc].ui64;
                 printf("CALL %llu\n", numArgs);
             } break;
             case OP_RETURN: {
@@ -191,7 +172,7 @@ void dumpBytecode(CompilerState *state) {
             } break;
             case OP_PUSH_LAMBDA_ID: {
                 pc++;
-                uint64 id = state->bytecode[pc].ui64;
+                uint64 id = func->bytecode[pc].ui64;
                 printf("PUSH_LAMBDA_ID %llu\n", id);
             } break;
             case OP_CLEAR_STACK: {

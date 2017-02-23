@@ -112,9 +112,8 @@ uint32 internSymbol(LispisState *state, String symbol, uint64 symHash) {
         stIndex = stIndex % st->symbolsSize;
     }
     st->symbols[stIndex].symbol = symbol;
-    st->symbols[stIndex].localSymbolID = state->nextGlobalSymbolID;
-    st->symbols[stIndex].globalSymbolID = state->nextGlobalSymbolID;
-    state->nextGlobalSymbolID++;
+    st->symbols[stIndex].globalSymbolID = st->nextGlobalSymbolID;
+    st->nextGlobalSymbolID++;
     st->symbols[stIndex].hash = symHash;
     st->symbols[stIndex].filled = true;
     st->symbolsInterned++;
@@ -125,6 +124,7 @@ void loadLocalSymbolRaw(LispisState *state,
                         LispisFunction *func,
                         String symbol,
                         uint32 symbolID) {
+#if 0
     if (func->localToGlobalTableFilled + 1 >=
         func->localToGlobalTableSize) { 
         func->localToGlobalTableSize *= 1.5f;
@@ -137,6 +137,7 @@ void loadLocalSymbolRaw(LispisState *state,
     func->localToGlobalTable[symbolID] = internSymbol(state, symbol,
                                                       hashFunc(symbol));
     func->localToGlobalTableFilled++;
+#endif
 }
 
 Bytecode *loadSymbolSection(LispisState *state,
@@ -215,9 +216,9 @@ LispisFunction *loadFunction(LispisState *state,
     Bytecode *bytecode = startBytecode;
     LispisFunction *ret =
         (LispisFunction *)calloc(1, sizeof(LispisFunction));
-    ret->localToGlobalTableSize = 64;
-    ret->localToGlobalTable =
-        (uint32 *)calloc(ret->localToGlobalTableSize, sizeof(uint32));
+    //ret->localToGlobalTableSize = 64;
+    //ret->localToGlobalTable =
+    //(uint32 *)calloc(ret->localToGlobalTableSize, sizeof(uint32));
     uint64 numSubFunctions = bytecode->ui64;
     bytecode++;
     if (numSubFunctions) {
@@ -367,20 +368,8 @@ Value runFunction(LispisState *state, LispisFunction *func) {
             case OP_PUSH: {
                 Value p;
                 p = func->bytecode[state->currRecord->pc];
-                // use OP_PUSH_TRANSLATE_SYMBOL
-                assert(getType(p) != LISPIS_SYM_IDX);
                 state->currRecord->pc++;
                 push(state, p);
-            } break;
-            case OP_PUSH_TRANSLATE_SYMBOL: {
-                Value idVal;
-                idVal = func->bytecode[state->currRecord->pc];
-                uint32 id = unpackSymbolID(idVal);
-                assert(id < func->localToGlobalTableFilled);
-                uint32 globalId = func->localToGlobalTable[id];
-                idVal = nanPackSymbolIdx(globalId);
-                state->currRecord->pc++;
-                push(state, idVal);
             } break;
             case OP_LIST: {
                 int32 numElems = unpackInt(pop(state));
@@ -688,25 +677,7 @@ int main(int argsc, char **args) {
     Expr *astDone = astExpr2;
     printf("AST:\n");
     dumpTree(astDone, 0);
-    CompilerState compiler = {};
-    compiler.bytecodeSize = 256;
-    compiler.symbolIndexMap.symbolsSize = 3;
-    compiler.bytecode =
-        (Bytecode *)calloc(1, compiler.bytecodeSize * sizeof(Bytecode));
-    compiler.symbolIndexMap.symbolMap =
-        (SymIdBucket *)calloc(1, 
-                              compiler.symbolIndexMap.symbolsSize *
-                              sizeof(SymIdBucket));
-    compileExpression(&compiler, astDone);
-    compiler.symbolSectionSize = 256;
-    compiler.symbolSection =
-        (Bytecode *)calloc(compiler.symbolSectionSize,
-                           sizeof(Bytecode));
-    encodeSymbolSection(&compiler);
-    pushOp(&compiler, OP_RETURN);
-    dumpBytecode(&compiler);
 
-    Bytecode *bytecode = compactBytecode(&compiler);
     LispisState state = {};
     state.globalEnviroment.parentEnv = 0;
     state.globalSymbolTable.symbolsSize = 256;
@@ -722,6 +693,11 @@ int main(int argsc, char **args) {
                 state.globalSymbolTable.symbolsSize);
     state.dataStackSize = 1024;
     state.dataStack = (Value *)malloc(state.dataStackSize*sizeof(uint64));
+
+
+    //Bytecode *bytecode = compactBytecode(&compiler);
+
+
 
 
 
@@ -763,8 +739,27 @@ int main(int argsc, char **args) {
     // usage code!
 
 
-    LispisFunction *entry = loadFunction(&state,
-                                         bytecode);
+    // put in utility function
+    LispisFunction *entry =
+        (LispisFunction *)calloc(1, sizeof(LispisFunction));
+    //entry->localToGlobalTableSize = 64;
+    //entry->localToGlobalTable =
+    //(uint32 *)calloc(entry->localToGlobalTableSize, sizeof(uint32));
+    entry->bytecodeSize = 256;
+    entry->bytecode =
+        (Bytecode *)calloc(1, entry->bytecodeSize * sizeof(Bytecode));
+    compileExpression(&state, entry, astDone);
+    dealloc(astExpr2);
+    dealloc(astExpr1);
+    dealloc(parseTreeExpr);
+
+
+    pushOp(&state, entry, OP_RETURN);
+    dumpBytecode(&state, entry);
+
+
+    //LispisFunction *entry = loadFunction(&state,
+    //bytecode);
     //printf("enviroment:\n");
     //dumpEnviroment(&state.globalSymbolTable,
     //entry,
@@ -776,8 +771,5 @@ int main(int argsc, char **args) {
                entry,
                retVal);
     
-    dealloc(astExpr2);
-    dealloc(astExpr1);
-    dealloc(parseTreeExpr);
     return 0;
 }

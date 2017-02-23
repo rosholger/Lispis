@@ -6,6 +6,7 @@
                    1
                  (* n (fib (- n 1))))))
    (fib 6)))
+(asd asd)
 
 ;(((lambda (x y z) (lambda () x)) 6 4 3))
 ;(+ (/ 6 4) 3)
