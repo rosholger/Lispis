@@ -30,3 +30,5 @@ lispis
 
 # Tup database
 .tup/*
+
+vgcore.*

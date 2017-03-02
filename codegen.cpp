@@ -129,9 +129,12 @@ LispisFunction *startNewLambda(LispisState *state, LispisFunction *func) {
     func->subFunctionsLength++;
     func->subFunctions =
         (LispisFunction **)realloc(func->subFunctions,
-                                   func->subFunctionsLength);
+                                   func->subFunctionsLength *
+                                   sizeof(LispisFunction *));
     LispisFunction *ret =
-        (LispisFunction *)calloc(1, sizeof(LispisFunction));
+        (LispisFunction *)callocGcObject(state, sizeof(LispisFunction));
+    ret->header.type = GC_LISPIS_FUNCTION;
+    putInZeroCountTable(state, (GcObjectHeader *)ret);
     //ret->localToGlobalTableSize = 64;
     //ret->localToGlobalTable =
     //(uint32 *)calloc(ret->localToGlobalTableSize, sizeof(uint32));
@@ -140,38 +143,6 @@ LispisFunction *startNewLambda(LispisState *state, LispisFunction *func) {
         (Bytecode *)calloc(1, ret->bytecodeSize * sizeof(Bytecode));
     func->subFunctions[func->subFunctionsLength-1] = ret;
     return ret;
-#if 0
-    state->childStatesLength++;
-    if (state->childStates) {
-        state->childStates =
-            (CompilerState *)realloc(state->childStates,
-                                     sizeof(CompilerState) *
-                                     state->childStatesLength);
-    } else {
-        state->childStates =
-            (CompilerState *)malloc(sizeof(CompilerState) *
-                                    state->childStatesLength);
-    } 
-    CompilerState *ret = state->childStates + state->childStatesLength-1;
-    ret->symbolSectionTop = 0;
-    ret->symbolSectionSize = 8;
-    ret->bytecodeTop = 0;
-    ret->bytecodeSize = 16;
-    ret->symbolSection = (Bytecode *)malloc(sizeof(Bytecode) *
-                                            ret->symbolSectionSize);
-    ret->bytecode = (Bytecode *)malloc(sizeof(Bytecode) *
-                                       ret->bytecodeSize);
-    ret->symbolIndexMap.symbolsSize = 16;
-    ret->symbolIndexMap.symbolsFilled = 0;
-    ret->symbolIndexMap.nextSymbolId = 0;
-    ret->symbolIndexMap.symbolMap =
-        (SymIdBucket *)calloc(ret->symbolIndexMap.symbolsSize,
-                              sizeof(SymIdBucket));
-    ret->childStates = 0;
-    ret->childStatesLength = 0;
-    return ret;
-#endif
-    return 0;
 }
 
 void compileLambdaParamsRec(LispisState *state, LispisFunction *func, ExprList *params) {
@@ -254,6 +225,14 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
                                 expr->paramsCount);
             compileLambdaBody(state, newFunc, expr->body);
             //encodeSymbolSection(state, newFunc);
+        } break;
+        case EXPR_DEFINE: {
+            compileExpression(state, func, expr->value);
+            pushOp(state, func, OP_PUSH);
+            pushSymbol(state, func, expr->variable->symbolID);
+            pushOp(state, func, OP_SET_GLOBAL_VARIABLE);
+            // makes let! return the value, prob. pretty slow...
+            compileExpression(state, func, expr->variable);
         } break;
         case EXPR_LET: {
             compileExpression(state, func, expr->value);

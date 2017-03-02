@@ -83,6 +83,15 @@ void dumpTree(LispisState *state, Expr *node, int identLevel) {
                 }
                 printf(")\n");
             } break;
+            case EXPR_DEFINE: {
+                printf("(DEFINE!\n");
+                dumpTree(state, node->variable, identLevel + 1);
+                dumpTree(state, node->value, identLevel + 1);
+                for (int i = 0; i < identLevel; ++i) {
+                    printf("  ");
+                }
+                printf(")\n");
+            } break;
             case EXPR_LET: {
                 printf("(LET!\n");
                 dumpTree(state, node->variable, identLevel + 1);
@@ -164,6 +173,9 @@ void dumpBytecode(LispisState *state, LispisFunction *func) {
                     default:assert(false);
                 }
             } break;
+            case OP_SET_GLOBAL_VARIABLE: {
+                printf("SET_GLOBAL_VARIABLE\n");
+            } break;
             case OP_SET_LOCAL_VARIABLE: {
                 printf("SET_LOCAL_VARIABLE\n");
             } break;
@@ -189,23 +201,54 @@ void dumpBytecode(LispisState *state, LispisFunction *func) {
     printf("End Bytecode Section\n\n");
 }
 
+void deallocList(ExprList *list) {
+    ExprList *e = list;
+    while(e) {
+        dealloc(e->val);
+        ExprList *next = e->next;
+        free(e);
+        e = next;
+    }
+}
+
 void dealloc(Expr *expr) {
     if (expr) {
-        if (expr->exprType == EXPR_CALL) {
-            if (expr->callee) {
-                dealloc(expr->callee);
-                ExprList *param = expr->arguments;
-                while(param) {
-                    dealloc(param->val);
-                    ExprList *next = param->next;
-                    free(param);
-                    param = next;
+        switch (expr->exprType) {
+            case EXPR_FLOAT:
+            case EXPR_STRING: // FIX
+            case EXPR_SYMBOL_ID:
+            case EXPR_INT:
+            case EXPR_SYMBOL: {
+            } break;
+            case EXPR_DEFINE:
+            case EXPR_LET: {
+                dealloc(expr->variable);
+                dealloc(expr->value);
+            } break;
+            case EXPR_CALL: {
+                if (expr->callee) {
+                    dealloc(expr->callee);
+                    deallocList(expr->arguments);
+                } else {
+                    assert(expr->arguments == 0);
                 }
-            } else {
-                assert(expr->arguments == 0);
-            }
-        } else if (expr->exprType == EXPR_QUOTE) {
-            dealloc(expr->quoted);
+            } break;
+            case EXPR_QUOTE: {
+                dealloc(expr->quoted);
+            } break;
+            case EXPR_LIST: {
+                deallocList(expr->list);
+            } break;
+            case EXPR_LAMBDA: {
+                deallocList(expr->params);
+                deallocList(expr->body);
+            } break;
+            case EXPR_IF: {
+                dealloc(expr->predicate);
+                dealloc(expr->trueBranch);
+                dealloc(expr->falseBranch);
+            } break;
+            default: assert(false);
         }
         free(expr);
     }

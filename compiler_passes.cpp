@@ -7,6 +7,7 @@
 uint32 quote;
 uint32 lambda;
 uint32 let;
+uint32 define;
 uint32 ifSym;
 
 Expr *symbolIdPass(LispisState *state, Expr *expr) {
@@ -177,7 +178,7 @@ Expr *copyQuoted(LispisState *state, Expr *expr) {
 }
 
 Expr *lambdaPass(LispisState *state, Expr *expr) {
-    Expr *ret = (Expr *)malloc(sizeof(Expr));
+    Expr *ret = (Expr *)calloc(1, sizeof(Expr));
     switch (expr->exprType) {
         case EXPR_STRING:
         case EXPR_INT:
@@ -360,6 +361,71 @@ Expr *letPass(LispisState *state, Expr *expr) {
     return ret;
 }
 
+Expr *definePass(LispisState *state, Expr *expr) {
+    Expr *ret = (Expr *)malloc(sizeof(Expr));
+    switch (expr->exprType) {
+        case EXPR_STRING:
+        case EXPR_INT:
+        case EXPR_FLOAT:
+        case EXPR_SYMBOL_ID: {
+            *ret = *expr;
+        } break;
+        case EXPR_QUOTE: {
+            *ret = *expr;
+            ret->quoted = copyQuoted(state, expr->quoted);
+        } break;
+        case EXPR_LAMBDA: {
+            *ret = *expr;
+            ret->params = copyLambdaParams(state, expr->params);
+            ret->body = copyLambdaBody(state, expr->body, definePass);
+        } break;
+        case EXPR_LET: {
+            *ret = *expr;
+            ret->variable = (Expr *)malloc(sizeof(Expr));
+            *ret->variable = *expr->variable;
+            ret->value = definePass(state, expr->value);
+        } break;
+        case EXPR_CALL: {
+            if (expr->callee && expr->callee->exprType == EXPR_SYMBOL_ID) {
+                if (expr->callee->symbolID == define) {
+                    ret->exprType = EXPR_DEFINE;
+                    ret->line = expr->line;
+                    assert(expr->arguments);
+                    assert(expr->arguments->val);
+                    assert(expr->arguments->val->exprType == EXPR_SYMBOL_ID);
+                    assert(expr->arguments->next);
+                    assert(! expr->arguments->next->next);
+                    ret->variable = (Expr *)malloc(sizeof(Expr));
+                    *ret->variable = *expr->arguments->val;
+                    ret->value = definePass(state,
+                                            expr->arguments->next->val);
+                    return ret;
+                }
+            }
+            *ret = *expr;
+            if (expr->callee) {
+                ret->callee = definePass(state, expr->callee);
+                ret->arguments = 0;
+                if (expr->arguments) {
+                    ret->arguments = (ExprList *)malloc(sizeof(ExprList));
+                    ret->arguments->val =
+                        definePass(state, expr->arguments->val);
+                    ExprList *prev = ret->arguments;
+                    for (ExprList *param = expr->arguments->next;
+                         param; param = param->next) {
+                        prev->next = (ExprList *)malloc(sizeof(ExprList));
+                        prev = prev->next;
+                        prev->val = definePass(state, param->val);
+                    }
+                    prev->next = 0;
+                }
+            }
+        } break;
+        default:assert(false);
+    }
+    return ret;
+}
+
 Expr *ifPass(LispisState *state, Expr *expr) {
     Expr *ret = (Expr *)malloc(sizeof(Expr));
     switch (expr->exprType) {
@@ -378,6 +444,7 @@ Expr *ifPass(LispisState *state, Expr *expr) {
             ret->params = copyLambdaParams(state, expr->params);
             ret->body = copyLambdaBody(state, expr->body, ifPass);
         } break;
+        case EXPR_DEFINE:
         case EXPR_LET: {
             *ret = *expr;
             ret->variable = (Expr *)malloc(sizeof(Expr));

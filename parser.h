@@ -11,10 +11,9 @@ enum ExprType {
     EXPR_CALL,
     EXPR_QUOTE,
     EXPR_LAMBDA,
-    EXPR_PARAMS,
-    EXPR_BODY,
     EXPR_LIST,
     EXPR_LET,
+    EXPR_DEFINE,
     EXPR_IF,
     EXPR_SYMBOL_ID,
 };
@@ -40,7 +39,7 @@ struct Expr {
             Expr *callee;
             ExprList *arguments;
         };
-        struct { // LET (let! a 1)
+        struct { // LET (let! a 1) or DEFINE (define! a 1)
             Expr *variable;
             Expr *value;
         };

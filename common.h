@@ -2,6 +2,7 @@
 #define COMMON_H
 
 typedef unsigned int uint32;
+typedef unsigned char uint8;
 typedef unsigned long long int uint64;
 typedef int int32;
 typedef long long int int64;
@@ -15,6 +16,7 @@ enum OpCodes {
     OP_EXIT,
     OP_PUSH,
     OP_SET_LOCAL_VARIABLE,
+    OP_SET_GLOBAL_VARIABLE,
     OP_CALL,
     OP_RETURN,
     OP_SYMBOL_SECTION,

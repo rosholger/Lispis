@@ -10,7 +10,7 @@
 Expr quoteSym;
 
 Expr *parseExpression(Lexer *lexer) {
-    Expr *ret = (Expr *)malloc(sizeof(Expr));
+    Expr *ret = (Expr *)calloc(1, sizeof(Expr));
     Token tok = eatToken(lexer);
     switch(tok.tokenType) {
         case TOK_QUOTE_ABR: {
