@@ -12,8 +12,6 @@ enum GcObjectType {
     GC_PAIR
 };
 
-//TODO circular references, closures always close on them self
-
 enum GcColor {
     GC_black = 1 << 0,
     GC_gray = 1 << 1,
@@ -23,11 +21,11 @@ enum GcColor {
 
 struct GcObjectHeader {
     uint8 color;
-    uint32 refCount;
+    //uint32 refCount;
     GcObjectHeader *next; // allocated GcObject
     GcObjectHeader *prev; // allocated GcObject
-    GcObjectHeader *nextZCT;
-    GcObjectHeader *prevZCT;
+    //GcObjectHeader *nextZCT;
+    //GcObjectHeader *prevZCT;
     GcObjectType type;
 };
 
@@ -77,8 +75,10 @@ struct ActivationRecord {
     bool calledFromC;
 };
 
+// Used for macros to
 struct LispisFunction {
     GcObjectHeader header;
+    bool macro;
     Bytecode *bytecode;
     uint64 bytecodeSize;
     uint64 bytecodeTop; // used while compiling only
@@ -102,6 +102,19 @@ struct Pair {
     Value cdr;
 };
 
+struct Nursery {
+    void *mem;
+    uint32 size;
+    uint32 top;
+};
+
+struct ForwardingList {
+    void **oldAddr;
+    void **newAddr;
+    uint32 size;
+    uint32 top;
+};
+
 struct LispisState {
     Env globalEnviroment;
     SymbolTable globalSymbolTable;
@@ -109,8 +122,8 @@ struct LispisState {
     Value *dataStack;
     uint32 dataStackSize;
     uint32 dataStackTop;
-    GcObjectHeader *firstZeroCountGcObject;
-    GcObjectHeader *lastZeroCountGcObject;
+    //GcObjectHeader *firstZeroCountGcObject;
+    //GcObjectHeader *lastZeroCountGcObject;
     GcObjectHeader *firstGcObject;
     GcObjectHeader *toSweep;
     GcObjectHeader *grayStack;
@@ -118,13 +131,41 @@ struct LispisState {
     bool sweepPhase;
 };
 
+Value cons(LispisState *state, Value car, Value cdr);
+Value emptyList();
+bool isNill(Value v);
+
 void *callocGcObject(LispisState *state, uint64 size);
 
 uint32 internSymbol(LispisState *state, String symbol, uint64 symHash);
 
+#if 0
 void decRef(LispisState *state, GcObjectHeader *obj);
 void incRef(LispisState *state, GcObjectHeader *obj);
 void decRef(LispisState *state, Value v);
 void incRef(LispisState *state, Value v);
 void putInZeroCountTable(LispisState *state, GcObjectHeader *obj);
+#endif
+Value evalGlobalSymbol(Env *env, uint32 globalSymbolID);
+void writeBarrier(LispisState *state, GcObjectHeader *header);
+Value peek(LispisState *state);
+Value pop(LispisState *state);
+void push(LispisState *state, Value v);
+Value indexStack(LispisState *state, int64 i);
+Pair *unpackCons(Value v);
+CFunction *unpackCFunc(Value v);
+LispisFunctionObject *unpackLFunc(Value v);
+void freeze(LispisState *state, GcObjectHeader *header);
+void unfreeze(LispisState *state, GcObjectHeader *header);
+ActivationRecord *allocActivationRecord(LispisState *state,
+                                        LispisFunction *func,
+                                        Env *parentEnv);
+void bindFunction(LispisState *state, String symbol,
+                  LispisCFunction func);
+Value runFunction(LispisState *state, Value funcObjValue, uint64 numArgs);
+void clearStack(LispisState *state);
+void markAndSweep(LispisState *state);
+void destroy(LispisState *state);
+void setVariableRaw(LispisState *state, Env *env,
+                    Value v, uint32 symbolID);
 #endif

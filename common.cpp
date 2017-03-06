@@ -6,6 +6,89 @@
 #include "common.h"
 #include "parser.h"
 #include "codegen.h"
+#include "vm.h"
+
+Value exprListToConsList(LispisState *state, ExprList *lst, bool dotted);
+
+Value exprToConsList(LispisState *state, Expr *expr) {
+    Value ret;
+    switch (expr->exprType) {
+        case EXPR_SYMBOL_ID: {
+            ret = nanPackSymbolIdx(expr->symbolID);
+        } break;
+        case EXPR_INT: {
+            ret = nanPackInt32(expr->intVal);
+        } break;
+        case EXPR_DOUBLE: {
+            ret.f64 = expr->doubleVal;
+        } break;
+        case EXPR_CALL: {
+            Value args = exprListToConsList(state, expr->arguments,
+                                            expr->dotted);
+            ret = cons(state, exprToConsList(state, expr->callee), args);
+        } break;
+        default:assert(false);
+    }
+    return ret;
+}
+
+Value exprListToConsList(LispisState *state, ExprList *lst, bool dotted) {
+    if (!lst) {
+        return emptyList();
+    }
+    if (!lst->next && dotted) {
+        return exprToConsList(state, lst->val);
+    }
+    return cons(state, exprToConsList(state, lst->val),
+                exprListToConsList(state, lst->next, dotted));
+}
+
+ExprList *consListToArgumentList(LispisState *state, Value consList,
+                                 int line, Expr *e) {
+    if (isNill(consList)) {
+        e->dotted = false;
+        return 0;
+    }
+    ExprList *ret = (ExprList *)malloc(sizeof(ExprList));
+    if (getType(consList) != LISPIS_CONS) {
+        e->dotted = true;
+        ret->next = 0;
+        ret->val = consListToExpr(state, consList, line);
+        return ret;
+    }
+    Pair *p = unpackCons(consList);
+    ret->val = consListToExpr(state, p->car, line);
+    ret->next = consListToArgumentList(state, p->cdr, line, e);
+    return ret;
+}
+
+Expr *consListToExpr(LispisState *state, Value consList, int line) {
+    Expr *ret = (Expr *)calloc(1, sizeof(Expr));
+    ret->line = line;
+    switch (getType(consList)) {
+        case LISPIS_INT32: {
+            ret->exprType = EXPR_INT;
+            ret->intVal = unpackInt(consList);
+        } break;
+        case LISPIS_SYM_IDX: {
+            ret->exprType = EXPR_SYMBOL_ID;
+            ret->symbolID = unpackSymbolID(consList);
+        } break;
+        case LISPIS_CONS: {
+            ret->exprType = EXPR_CALL;
+            if (!isNill(consList)) {
+                ret->callee = consListToExpr(state,
+                                             unpackCons(consList)->car,
+                                             line);
+                Value args = unpackCons(consList)->cdr;
+                ret->arguments = consListToArgumentList(state, args,
+                                                        line, ret);
+            }
+        } break;
+        default: assert(false);
+    }
+    return ret;
+}
 
 void dumpTree(LispisState *state, Expr *node, int identLevel) {
     for (int i = 0; i < identLevel; ++i) {
@@ -13,10 +96,64 @@ void dumpTree(LispisState *state, Expr *node, int identLevel) {
     }
     if (node) {
         switch(node->exprType) {
+            case EXPR_QUASIQUOTE: {
+                printf("(QUASIQUOTE\n");
+                for (int i = 0; i < identLevel+1; ++i) {
+                    printf("  ");
+                }
+                for (QuasiquoteList *e = node->quasiquoteList;
+                     e; e = e->next) {
+                    if (node->dotted && !e->next) {
+                        for (int i = 0; i < identLevel+1; ++i) {
+                            printf("  ");
+                        }
+                        printf(".\n");
+                    }
+                    if (!node->dotted || e->val) {
+                        if (e->unquoted) {
+                            for (int i = 0; i < identLevel+1; ++i) {
+                                printf("  ");
+                            }
+                            printf("(UNQUOTE\n");
+                        }
+                        if (e->unquoteSpliced) {
+                            for (int i = 0; i < identLevel+1; ++i) {
+                                printf("  ");
+                            }
+                            printf("(UNQUOTE-SPLICE\n");
+                        }
+                        dumpTree(state, e->val, identLevel+1);
+                        if (e->unquoted) {
+                            for (int i = 0; i < identLevel+1; ++i) {
+                                printf("  ");
+                            }
+                            printf(")\n");
+                        }
+                        if (e->unquoteSpliced) {
+                            for (int i = 0; i < identLevel+1; ++i) {
+                                printf("  ");
+                            }
+                            printf(")\n");
+                        }
+                    }
+                }
+                for (int i = 0; i < identLevel; ++i) {
+                    printf("  ");
+                }
+                printf(")\n");
+            } break;
             case EXPR_LIST: {
                 printf("(\n");
                 for (ExprList *e = node->list; e; e = e->next) {
-                    dumpTree(state, e->val, identLevel+1);
+                    if (node->dotted && !e->next) {
+                        for (int i = 0; i < identLevel+1; ++i) {
+                            printf("  ");
+                        }
+                        printf(".\n");
+                    }
+                    if (!node->dotted || e->val) {
+                        dumpTree(state, e->val, identLevel+1);
+                    }
                 }
                 for (int i = 0; i < identLevel; ++i) {
                     printf("  ");
@@ -34,8 +171,8 @@ void dumpTree(LispisState *state, Expr *node, int identLevel) {
             case EXPR_INT: {
                 printf("%d", node->intVal);
             } break;
-            case EXPR_FLOAT: {
-                printf("%f", node->floatVal);
+            case EXPR_DOUBLE: {
+                printf("%f", node->doubleVal);
             } break;
             case EXPR_SYMBOL: {
                 printf("%.*s", (int)node->str.length, node->str.val);
@@ -52,7 +189,15 @@ void dumpTree(LispisState *state, Expr *node, int identLevel) {
                     dumpTree(state, node->callee, 0);
                     for (ExprList *param = node->arguments;
                          param; param = param->next) {
-                        dumpTree(state, param->val, identLevel+1);
+                        if (node->dotted && !param->next) {
+                            for (int i = 0; i < identLevel+1; ++i) {
+                                printf("  ");
+                            }
+                            printf(".\n");
+                        }
+                        if (!node->dotted || param->val) {
+                            dumpTree(state, param->val, identLevel+1);
+                        }
                     }
                     for (int i = 0; i < identLevel; ++i) {
                         printf("  ");
@@ -62,19 +207,56 @@ void dumpTree(LispisState *state, Expr *node, int identLevel) {
                 }
                 printf(")");
             } break;
-            case EXPR_LAMBDA: {
-                printf("(LAMBDA (\n");
-                if (node->params) {
-                    for (ExprList *param = node->params;
+            case EXPR_MACRO: {
+                printf("(MACRO %u (\n", node->macro.name);
+                if (node->macro.params) {
+                    for (ExprList *param = node->macro.params;
                          param; param = param->next) {
-                        dumpTree(state, param->val, identLevel+1);
+                        if (node->macro.varargs && !param->next) {
+                            for (int i = 0; i < identLevel+1; ++i) {
+                                printf("  ");
+                            }
+                            printf(".\n");
+                        }
+                        if (!node->macro.varargs || param->val) {
+                            dumpTree(state, param->val, identLevel+1);
+                        }
                     }
                 }
                 for (int i = 0; i < identLevel; ++i) {
                     printf("  ");
                 }
                 printf(")\n");
-                for (ExprList *expr = node->body;
+                for (ExprList *expr = node->macro.body;
+                     expr; expr = expr->next) {
+                    dumpTree(state, expr->val, identLevel+1);
+                }
+                for (int i = 0; i < identLevel; ++i) {
+                    printf("  ");
+                }
+                printf(")\n");
+            } break;
+            case EXPR_LAMBDA: {
+                printf("(LAMBDA (\n");
+                if (node->lambda.params) {
+                    for (ExprList *param = node->lambda.params;
+                         param; param = param->next) {
+                        if (node->lambda.varargs && !param->next) {
+                            for (int i = 0; i < identLevel+1; ++i) {
+                                printf("  ");
+                            }
+                            printf(".\n");
+                        }
+                        if (!node->lambda.varargs || param->val) {
+                            dumpTree(state, param->val, identLevel+1);
+                        }
+                    }
+                }
+                for (int i = 0; i < identLevel; ++i) {
+                    printf("  ");
+                }
+                printf(")\n");
+                for (ExprList *expr = node->lambda.body;
                      expr; expr = expr->next) {
                     dumpTree(state, expr->val, identLevel+1);
                 }
@@ -133,6 +315,9 @@ void dumpBytecode(LispisState *state, LispisFunction *func) {
         assert(pc < func->bytecodeTop);
         OpCodes op = func->bytecode[pc].opCode;
         switch (op) {
+            case OP_APPEND: {
+                printf("APPEND\n");
+            } break;
             case OP_JUMP_IF_TRUE: {
                 pc++;
                 int64 relativeTarget = func->bytecode[pc].i64;
@@ -143,6 +328,9 @@ void dumpBytecode(LispisState *state, LispisFunction *func) {
                 int64 relativeTarget = func->bytecode[pc].i64;
                 printf("JUMP %lld\n", relativeTarget);
             } break;
+            case OP_PUSH_NULL: {
+                printf("PUSH_NULL\n");
+            } break;
             case OP_POP_ASSERT_EQUAL: {
                 printf("POP_ASSERT_EQUAL\n");
             } break;
@@ -151,7 +339,7 @@ void dumpBytecode(LispisState *state, LispisFunction *func) {
             } break;
             case OP_LIST: {
                 printf("LIST\n");
-            }
+            } break;
             case OP_EXIT: {
                 printf("EXIT\n");
             } break;
@@ -195,6 +383,15 @@ void dumpBytecode(LispisState *state, LispisFunction *func) {
             case OP_CLEAR_STACK: {
                 printf("CLEAR_STACK\n");
             } break;
+            case OP_POP_ASSERT_LESS_OR_EQUAL: {
+                printf("POP_ASSERT_LESS_OR_EQUAL\n");
+            } break;
+            case OP_COLLECT_VARARGS: {
+                pc++;
+                int32 numFormals = func->bytecode[pc].i32;
+                printf("COLLECT_VARARGS %d\n",
+                       numFormals);
+            } break;
             default:assert(false);
         }
     }
@@ -214,7 +411,7 @@ void deallocList(ExprList *list) {
 void dealloc(Expr *expr) {
     if (expr) {
         switch (expr->exprType) {
-            case EXPR_FLOAT:
+            case EXPR_DOUBLE:
             case EXPR_STRING: // FIX
             case EXPR_SYMBOL_ID:
             case EXPR_INT:
@@ -239,14 +436,27 @@ void dealloc(Expr *expr) {
             case EXPR_LIST: {
                 deallocList(expr->list);
             } break;
+            case EXPR_MACRO: {
+                deallocList(expr->macro.params);
+                deallocList(expr->macro.body);
+            } break;
             case EXPR_LAMBDA: {
-                deallocList(expr->params);
-                deallocList(expr->body);
+                deallocList(expr->lambda.params);
+                deallocList(expr->lambda.body);
             } break;
             case EXPR_IF: {
                 dealloc(expr->predicate);
                 dealloc(expr->trueBranch);
                 dealloc(expr->falseBranch);
+            } break;
+            case EXPR_QUASIQUOTE: {
+                QuasiquoteList *e = expr->quasiquoteList;
+                while(e) {
+                    dealloc(e->val);
+                    QuasiquoteList *next = e->next;
+                    free(e);
+                    e = next;
+                }
             } break;
             default: assert(false);
         }

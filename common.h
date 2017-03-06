@@ -15,6 +15,7 @@ struct String {
 enum OpCodes {
     OP_EXIT,
     OP_PUSH,
+    OP_COLLECT_VARARGS,
     OP_SET_LOCAL_VARIABLE,
     OP_SET_GLOBAL_VARIABLE,
     OP_CALL,
@@ -24,9 +25,12 @@ enum OpCodes {
     OP_EVAL_SYMBOL,
     OP_CLEAR_STACK,
     OP_POP_ASSERT_EQUAL,
+    OP_POP_ASSERT_LESS_OR_EQUAL,
     OP_PUSH_LAMBDA_ID,
     OP_JUMP_IF_TRUE,
+    OP_PUSH_NULL,
     OP_JUMP,
+    OP_APPEND,
 };
 
 // TODO: switch all cases of bytecode from uint64 * to Bytecode *
@@ -51,6 +55,7 @@ union Bytecode {
 };
 
 struct Expr;
+struct ExprList;
 struct LispisState;
 struct LispisFunction;
 struct SymbolTable;
@@ -83,6 +88,8 @@ enum NanPackingTypes {
 
 typedef Bytecode Value;
 
+void printValue(SymbolTable *globalSymbolTable,
+                Value v);
 NanPackingTypes getType(Value v);
 int32 unpackInt(Value v);
 uint32 unpackSymbolID(Value v);
@@ -94,4 +101,7 @@ Value nanPackDouble(double d);
 Value nanPackSymbolIdx(uint32 s);
 Value nanPackPointer(void *p, uint32 typeID);
 Value nanPackBoolean(bool b);
+// after symbolIdPass, NOT after the following passes
+Value exprToConsList(LispisState *state, Expr *expr);
+Expr *consListToExpr(LispisState *state, Value consList, int line);
 #endif

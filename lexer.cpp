@@ -41,7 +41,7 @@ Token lexString(Lexer *lexer) {
 }
 
 bool startOfSymbol(char c) {
-    return (!isSpaceOrComment(c) && !isdigit(c));
+    return (!isSpaceOrComment(c) && !isdigit(c) && c != '.');
 }
 
 bool isSymbolChar(char c) {
@@ -80,6 +80,11 @@ Token lexToken(Lexer *lexer) {
     eatWhitespace(lexer);
     Token ret{};
     switch (*lexer->buf) {
+        case '.': {
+            lexer->buf++;
+            ret.tokenType = TOK_DOT;
+            return ret;
+        } break;
         case '\'': {
             lexer->buf++;
             ret.tokenType = TOK_QUOTE_ABR;

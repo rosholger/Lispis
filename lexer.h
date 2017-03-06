@@ -12,6 +12,7 @@ enum TokenType {
     TOK_LPAREN,
     TOK_RPAREN,
     TOK_QUOTE_ABR,
+    TOK_DOT,
     TOK_UNKNOWN
 };
 

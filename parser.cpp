@@ -44,14 +44,29 @@ Expr *parseExpression(Lexer *lexer) {
             while (peekToken(lexer).tokenType != TOK_RPAREN) {
                 ExprList *paramNode =
                     (ExprList *)malloc(sizeof(ExprList));
-                paramNode->val = parseExpression(lexer);
-                paramNode->next = 0;
-                if (tail) {
-                    tail->next = paramNode;
-                    tail = paramNode;
+                if (peekToken(lexer).tokenType == TOK_DOT) {
+                    eatToken(lexer);
+                    ret->dotted = true;
+                    paramNode->val = parseExpression(lexer);
+                    paramNode->next = 0;
+                    assert(peekToken(lexer).tokenType == TOK_RPAREN);
+                    if (tail) {
+                        tail->next = paramNode;
+                        tail = paramNode;
+                    } else {
+                        ret->arguments = paramNode;
+                        tail = paramNode;
+                    }
                 } else {
-                    ret->arguments = paramNode;
-                    tail = paramNode;
+                    paramNode->val = parseExpression(lexer);
+                    paramNode->next = 0;
+                    if (tail) {
+                        tail->next = paramNode;
+                        tail = paramNode;
+                    } else {
+                        ret->arguments = paramNode;
+                        tail = paramNode;
+                    }
                 }
             }
             eatToken(lexer); //TOK_RPAREN
