@@ -18,6 +18,13 @@ enum ExprType {
     EXPR_DEFINE,
     EXPR_IF,
     EXPR_SYMBOL_ID,
+    EXPR_VARIABLE,
+};
+
+enum VariableKind {
+    VAR_LOCAL,
+    VAR_UPVAL,
+    VAR_GLOBAL,
 };
 
 struct Expr;
@@ -69,6 +76,11 @@ struct Expr {
             Expr *trueBranch;
             Expr *falseBranch; // may be null
         };
+        struct {
+            uint32 variableID;
+            uint32 symbolID;
+            VariableKind kind;
+        } var;
     };
     bool dotted;
     ExprType exprType;

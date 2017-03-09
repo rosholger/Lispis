@@ -7,6 +7,7 @@
 #include "parser.h"
 #include "codegen.h"
 #include "vm.h"
+#include "config.h"
 
 Value exprListToConsList(LispisState *state, ExprList *lst, bool dotted);
 
@@ -98,9 +99,6 @@ void dumpTree(LispisState *state, Expr *node, int identLevel) {
         switch(node->exprType) {
             case EXPR_QUASIQUOTE: {
                 printf("(QUASIQUOTE\n");
-                for (int i = 0; i < identLevel+1; ++i) {
-                    printf("  ");
-                }
                 for (QuasiquoteList *e = node->quasiquoteList;
                      e; e = e->next) {
                     if (node->dotted && !e->next) {
@@ -115,14 +113,16 @@ void dumpTree(LispisState *state, Expr *node, int identLevel) {
                                 printf("  ");
                             }
                             printf("(UNQUOTE\n");
-                        }
-                        if (e->unquoteSpliced) {
+                            dumpTree(state, e->val, identLevel+2);
+                        } else if (e->unquoteSpliced) {
                             for (int i = 0; i < identLevel+1; ++i) {
                                 printf("  ");
                             }
                             printf("(UNQUOTE-SPLICE\n");
+                            dumpTree(state, e->val, identLevel+2);
+                        } else {
+                            dumpTree(state, e->val, identLevel+1);
                         }
-                        dumpTree(state, e->val, identLevel+1);
                         if (e->unquoted) {
                             for (int i = 0; i < identLevel+1; ++i) {
                                 printf("  ");
@@ -213,17 +213,17 @@ void dumpTree(LispisState *state, Expr *node, int identLevel) {
                     for (ExprList *param = node->macro.params;
                          param; param = param->next) {
                         if (node->macro.varargs && !param->next) {
-                            for (int i = 0; i < identLevel+1; ++i) {
+                            for (int i = 0; i < identLevel+2; ++i) {
                                 printf("  ");
                             }
                             printf(".\n");
                         }
                         if (!node->macro.varargs || param->val) {
-                            dumpTree(state, param->val, identLevel+1);
+                            dumpTree(state, param->val, identLevel+2);
                         }
                     }
                 }
-                for (int i = 0; i < identLevel; ++i) {
+                for (int i = 0; i < identLevel+1; ++i) {
                     printf("  ");
                 }
                 printf(")\n");
@@ -242,17 +242,17 @@ void dumpTree(LispisState *state, Expr *node, int identLevel) {
                     for (ExprList *param = node->lambda.params;
                          param; param = param->next) {
                         if (node->lambda.varargs && !param->next) {
-                            for (int i = 0; i < identLevel+1; ++i) {
+                            for (int i = 0; i < identLevel+2; ++i) {
                                 printf("  ");
                             }
                             printf(".\n");
                         }
                         if (!node->lambda.varargs || param->val) {
-                            dumpTree(state, param->val, identLevel+1);
+                            dumpTree(state, param->val, identLevel+2);
                         }
                     }
                 }
-                for (int i = 0; i < identLevel; ++i) {
+                for (int i = 0; i < identLevel+1; ++i) {
                     printf("  ");
                 }
                 printf(")\n");
@@ -361,11 +361,11 @@ void dumpBytecode(LispisState *state, LispisFunction *func) {
                     default:assert(false);
                 }
             } break;
-            case OP_SET_GLOBAL_VARIABLE: {
-                printf("SET_GLOBAL_VARIABLE\n");
+            case OP_SET_GLOBAL: {
+                printf("SET_GLOBAL\n");
             } break;
-            case OP_SET_LOCAL_VARIABLE: {
-                printf("SET_LOCAL_VARIABLE\n");
+            case OP_SET_LOCAL: {
+                printf("SET_LOCAL\n");
             } break;
             case OP_CALL: {
                 pc++;
@@ -415,6 +415,7 @@ void dealloc(Expr *expr) {
             case EXPR_STRING: // FIX
             case EXPR_SYMBOL_ID:
             case EXPR_INT:
+            case EXPR_VARIABLE:
             case EXPR_SYMBOL: {
             } break;
             case EXPR_DEFINE:
@@ -501,4 +502,49 @@ NanPackingTypes getType(Value v) {
         type = ((retI) >> 47) & 0xf;
     }
     return (NanPackingTypes)type;
+}
+
+void printValue(SymbolTable *globalSymbolTable,
+                Value v) {
+    switch (getType(v)) {
+        case LISPIS_INT32: {
+            printf("%d\n", unpackInt(v));
+        } break;
+        case LISPIS_SYM_IDX: {
+            String sym = globalSymbolIdToSymbol(globalSymbolTable,
+                                                v.ui32);
+            printf("%.*s\n", sym.length, sym.val);
+        } break;
+        case LISPIS_DOUBLE: {
+            printf("%f\n", v.f64);
+        } break;
+        case LISPIS_CONS: {
+            Pair *p = unpackCons(v);
+            if (p) {
+                assert(v.ui64 != p->car.ui64);
+                assert(v.ui64 != p->cdr.ui64);
+                printf("(\n");
+                printValue(globalSymbolTable, p->car);
+                printf(".\n");
+                printValue(globalSymbolTable, p->cdr);
+                printf(")\n");
+            } else {
+                printf("()\n");
+            }
+        } break;
+            //case NAN_PACKINT_USERP: {
+            //} break;
+        case LISPIS_CFUNC: {
+            CFunction *cfunc = unpackCFunc(v);
+            printf("<#CFunction %p>\n", cfunc);
+        } break;
+        case LISPIS_LFUNC: {
+            LispisFunctionObject *lfunc = unpackLFunc(v);
+            printf("<#Function %p>\n", lfunc);
+        } break;
+            //case NAN_PACKING_LFUNC: {
+            //} break;
+        case LISPIS_UNDEF:
+        default:assert(false);
+    }
 }

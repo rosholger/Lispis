@@ -184,12 +184,12 @@ void compileLambdaParamsRec(LispisState *state, LispisFunction *func,
         assert(params->next->val->exprType == EXPR_SYMBOL_ID);
         pushOp(state, func, OP_PUSH);
         pushSymbol(state, func, params->next->val->symbolID);
-        pushOp(state, func, OP_SET_LOCAL_VARIABLE);
+        pushOp(state, func, OP_SET_LOCAL);
     }
     assert(params->val->exprType == EXPR_SYMBOL_ID);
     pushOp(state, func, OP_PUSH);
     pushSymbol(state, func, params->val->symbolID);
-    pushOp(state, func, OP_SET_LOCAL_VARIABLE);
+    pushOp(state, func, OP_SET_LOCAL);
 }
 
 void compileLambdaParams(LispisState *state, LispisFunction *func,
@@ -214,7 +214,7 @@ void compileLambdaParams(LispisState *state, LispisFunction *func,
                 assert(params->val->exprType == EXPR_SYMBOL_ID);
                 pushOp(state, func, OP_PUSH);
                 pushSymbol(state, func, params->val->symbolID);
-                pushOp(state, func, OP_SET_LOCAL_VARIABLE);
+                pushOp(state, func, OP_SET_LOCAL);
             }
         }
     } else {
@@ -403,6 +403,11 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
             pushOp(state, func, OP_PUSH);
             pushDouble(state, func, expr->doubleVal);
         } break;
+        case EXPR_VARIABLE: {
+            pushOp(state, func, OP_PUSH);
+            pushSymbol(state, func, expr->var.symbolID);
+            pushOp(state, func, OP_EVAL_SYMBOL);
+        } break;
         case EXPR_SYMBOL_ID: {
             pushOp(state, func, OP_PUSH);
             pushSymbol(state, func, expr->symbolID);
@@ -424,8 +429,10 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
             compileLambdaParams(state, newMacro, expr->macro.params,
                                 expr->macro.paramsCount, expr->macro.varargs);
             compileLambdaBody(state, newMacro, expr->macro.body);
+#if LOG_ENABLED
             printf("Macro %u\n", expr->macro.name);
             dumpBytecode(state, newMacro);
+#endif
 
             LispisFunctionObject *macroObj =
                 (LispisFunctionObject *)callocGcObject(state,
@@ -453,7 +460,7 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
             compileExpression(state, func, expr->value);
             pushOp(state, func, OP_PUSH);
             pushSymbol(state, func, expr->variable->symbolID);
-            pushOp(state, func, OP_SET_GLOBAL_VARIABLE);
+            pushOp(state, func, OP_SET_GLOBAL);
             // makes let! return the value, prob. pretty slow...
             compileExpression(state, func, expr->variable);
         } break;
@@ -461,7 +468,7 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
             compileExpression(state, func, expr->value);
             pushOp(state, func, OP_PUSH);
             pushSymbol(state, func, expr->variable->symbolID);
-            pushOp(state, func, OP_SET_LOCAL_VARIABLE);
+            pushOp(state, func, OP_SET_LOCAL);
             // makes let! return the value, prob. pretty slow...
             compileExpression(state, func, expr->variable);
         } break;

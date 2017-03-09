@@ -1,6 +1,10 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+#include "config.h"
+
+#define arrayLength(array) (sizeof(array)/sizeof(*array))
+
 typedef unsigned int uint32;
 typedef unsigned char uint8;
 typedef unsigned long long int uint64;
@@ -16,13 +20,17 @@ enum OpCodes {
     OP_EXIT,
     OP_PUSH,
     OP_COLLECT_VARARGS,
-    OP_SET_LOCAL_VARIABLE,
-    OP_SET_GLOBAL_VARIABLE,
+    OP_SET_LOCAL,
+    OP_SET_UPVAL,
+    OP_SET_GLOBAL,
     OP_CALL,
     OP_RETURN,
     OP_SYMBOL_SECTION,
     OP_LIST,
     OP_EVAL_SYMBOL,
+    OP_GET_LOCAL,
+    OP_GET_GLOBAL,
+    OP_GET_UPVAL,
     OP_CLEAR_STACK,
     OP_POP_ASSERT_EQUAL,
     OP_POP_ASSERT_LESS_OR_EQUAL,
@@ -83,7 +91,7 @@ enum NanPackingTypes {
 
 
 
-    LISPIS_DOUBLE, // ALWAYS LAST!
+    LISPIS_DOUBLE, // ALWAYS LAST and <= 16!
 };
 
 typedef Bytecode Value;

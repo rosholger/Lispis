@@ -1,7 +1,12 @@
 #include "vm.h"
+#include "compiler_passes.h"
+#include "codegen.h"
+#include "parser.h"
+#include "lexer.h"
 #include <cassert>
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 
 void unlinkGcObject(LispisState *state, GcObjectHeader *header) {
     if (state->firstGcObject == header) {
@@ -147,16 +152,22 @@ uint32 internSymbol(LispisState *state, String symbol, uint64 symHash) {
         stIndex++;
         stIndex = stIndex % st->symbolsSize;
     }
-    st->symbols[stIndex].symbol = symbol;
+    char *symbolStrCopy = (char *)malloc(symbol.length *
+                                         sizeof(char));
+    memcpy(symbolStrCopy, symbol.val, symbol.length);
+    st->symbols[stIndex].symbol.length = symbol.length;
+    st->symbols[stIndex].symbol.val = symbolStrCopy;
     st->symbols[stIndex].globalSymbolID = st->nextGlobalSymbolID;
     st->nextGlobalSymbolID++;
     st->symbols[stIndex].hash = symHash;
     st->symbols[stIndex].filled = true;
     st->symbolsInterned++;
+#if LOG_ENABLED
     printf("Interned %.*s as %u\n",
            st->symbols[stIndex].symbol.length,
            st->symbols[stIndex].symbol.val,
            st->symbols[stIndex].globalSymbolID);
+#endif
 
     return st->symbols[stIndex].globalSymbolID;
 }
@@ -462,13 +473,13 @@ Value runFunction(LispisState *state, Value funcObjValue,
                 Value b = pop(state);
                 assert(a.ui64 == b.ui64);
             } break;
-            case OP_SET_LOCAL_VARIABLE: {
+            case OP_SET_LOCAL: {
                 uint32 symId = unpackSymbolID(pop(state));
                 Value v = pop(state);
                 setVariableRaw(state, state->currRecord->enviroment,
                                v, symId);
             } break;
-            case OP_SET_GLOBAL_VARIABLE: {
+            case OP_SET_GLOBAL: {
                 uint32 symId = unpackSymbolID(pop(state));
                 Value v = pop(state);
                 setVariableRaw(state, &state->globalEnviroment,
@@ -603,7 +614,9 @@ void unfreeze(LispisState *state, GcObjectHeader *header) {
 
 // does not free state, only the pointers inside
 void destroy(LispisState *state) {
+#if LOG_ENABLED
     printf("destroying state\n");
+#endif
     if (state->globalEnviroment.header.next) {
         state->globalEnviroment.header.next->prev =
             state->globalEnviroment.header.prev;
@@ -613,6 +626,13 @@ void destroy(LispisState *state) {
             state->globalEnviroment.header.next;
     }
     GcObjectHeader *next = state->firstGcObject;
+    for (uint64 deleted = 0, i = 0;
+         deleted < state->globalSymbolTable.symbolsInterned; i++) {
+        if (state->globalSymbolTable.symbols[i].filled) {
+            free(state->globalSymbolTable.symbols[i].symbol.val);
+            deleted++;
+        }
+    }
     while (next) {
         assert(next != next->next);
         GcObjectHeader *header = next;
@@ -826,4 +846,113 @@ void markAndSweep(LispisState *state) {
 
 void clearStack(LispisState *state) {
     state->dataStackTop = state->currRecord->dataStackBottom;
+}
+
+// Returns a LispisFunctionObject
+Value compileNullTerminatedString(LispisState *state, char *str) {
+    LispisFunction *entry =
+        (LispisFunction *)callocGcObject(state, sizeof(LispisFunction));
+    entry->header.type = GC_LISPIS_FUNCTION;
+    entry->bytecodeSize = 256;
+    entry->bytecode =
+        (Bytecode *)calloc(1, entry->bytecodeSize * sizeof(Bytecode));
+
+    Lexer lexer = {str};
+    eatToken(&lexer);
+
+    CompilerPass compilerPasses[] = {
+        symbolIdPass,
+        // TODO: integrate quotePass into evalMacroPass and make it
+        // expand recursive macros correctly
+        evalMacroPass,
+        macroPass,
+        lambdaPass,
+        letPass,
+        definePass,
+        ifPass,
+        //variablePass
+    };
+    pushOp(state, entry, OP_PUSH);
+    pushInt32(state, entry, 0);
+    pushOp(state, entry, OP_POP_ASSERT_EQUAL);
+    LexicalScope entryScope = {};
+    while (peekToken(&lexer).tokenType != TOK_EOF) {
+        Expr *parseTreeExpr = parseExpression(&lexer);
+#if LOG_ENABLED
+        printf("ParseTree:\n");
+        dumpTree(state, parseTreeExpr, 0);
+#endif
+        Expr *prev = parseTreeExpr;
+        Expr *next = 0;
+        for (uint32 i = 0; i < arrayLength(compilerPasses);
+             ++i) {
+            next = compilerPasses[i](state, prev);
+            dealloc(prev);
+            prev = next;
+            next = 0;
+        }
+        Expr *astDone = variablePass(state, prev, &entryScope);
+        dealloc(prev);
+#if LOG_ENABLED
+        printf("AST:\n");
+        dumpTree(state, astDone, 0);
+#endif
+        compileExpression(state, entry, astDone);
+        dealloc(astDone);
+        //dealloc(parseTreeExpr);
+        if (peekToken(&lexer).tokenType != TOK_EOF) {
+            pushOp(state, entry, OP_CLEAR_STACK);
+        }
+    }
+    pushOp(state, entry, OP_RETURN);
+#if LOG_ENABLED
+    dumpBytecode(state, entry);
+#endif
+
+    LispisFunctionObject *entryObj =
+        (LispisFunctionObject *)callocGcObject(state,
+                                               sizeof(LispisFunctionObject));
+    entryObj->header.type = GC_LISPIS_FUNCTION_OBJECT;
+    entryObj->function = entry;
+    entryObj->parentEnv = &state->globalEnviroment;
+
+    //TODO: should this really be frozen?
+    freeze(state, &entryObj->header);
+    return nanPackPointer(entryObj, LISPIS_LFUNC);
+}
+
+void initState(LispisState *state) {
+    state->globalEnviroment.header.type = GC_ENV;
+    state->globalEnviroment.parentEnv = 0;
+    state->globalSymbolTable.symbolsSize = 256;
+    state->globalEnviroment.variablesSize = 256;
+    state->globalSymbolTable.symbols =
+        (Symbol *)calloc(1,
+                         sizeof(Symbol) *
+                         state->globalSymbolTable.symbolsSize +
+                         sizeof(Var) *
+                         state->globalEnviroment.variablesSize);
+    state->globalEnviroment.variables =
+        (Var *)(state->globalSymbolTable.symbols +
+                state->globalSymbolTable.symbolsSize);
+    state->dataStackSize = 2*1024;
+    state->dataStack = (Value *)malloc(state->dataStackSize *
+                                       sizeof(Value));
+    freeze(state, &state->globalEnviroment.header);
+    state->currRecord = allocActivationRecord(state, 0, 0);
+    // TODO: make the currRecord and the dataStack up to
+    // dataStackTop roots
+    // then we dont have to freeze it
+    freeze(state, &state->currRecord->header);
+
+    setupSpecialFormSymbols(state);
+}
+
+Value runNullTerminatedString(LispisState *state, char *str) {
+    Value entryObjVal = compileNullTerminatedString(state,
+                                                    str);
+    Value retVal = runFunction(state, entryObjVal, 0);
+    clearStack(state);
+    unfreeze(state, &unpackLFunc(entryObjVal)->header);
+    return retVal;
 }

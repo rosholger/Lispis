@@ -1,2 +1,14 @@
-: foreach *.cpp |> g++ -fno-strict-aliasing -Wall -O0 -g -c %f |> %B.o
-: *.o |> g++ -fno-strict-aliasing %f -Wall -O0 -g -o %o |> lispis
+CFLAGS = -fno-strict-aliasing -Wall -pg
+LOG = -DLOG_ENABLED=1
+!cc = |> g++ $(CFLAGS) $(LOG) -O0 -g -c %f -o %o |>
+
+: foreach *.cpp |> !cc |> %B_def.o
+: main/main.cpp |> !cc |> %B_def.o
+
+LOG = -DLOG_ENABLED=0
+
+: foreach *.cpp |> !cc |> %B_nolog.o
+: tests/main.cpp |> !cc |> tests/%B.o
+
+: *_nolog.o tests/*.o |> g++ $(CFLAGS) %f -O0 -g -o %o |> allTests
+: *_def.o |> g++ $(CFLAGS) %f -O0 -g -o %o |> lispis

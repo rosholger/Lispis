@@ -168,4 +168,8 @@ void markAndSweep(LispisState *state);
 void destroy(LispisState *state);
 void setVariableRaw(LispisState *state, Env *env,
                     Value v, uint32 symbolID);
+Value compileNullTerminatedString(LispisState *state, char *str);
+void initState(LispisState *state);
+Value runNullTerminatedString(LispisState *state, char *str);
+Value lookupGlobal(LispisState *state, Value symbol);
 #endif
