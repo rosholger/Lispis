@@ -6,43 +6,6 @@
 #include <cstdio>
 #include <cstring>
 
-Value nanPackPointer(void *p, uint32 typeID) {
-    double nan = NAN;
-    uint64 retI = (0xFFFFFFFFFFFF & ((uint64)p));
-    uint64 nanVal = ((*(uint64 *)&nan) |
-                     retI |
-                     ((uint64)typeID << 47));
-    Value ret;
-    ret.ui64 = nanVal;
-    return ret;
-}
-
-Value nanPack(uint32 val, uint32 typeID) {
-    Value ret;
-    ret.f64 = NAN;
-    ret.ui64 |= (uint64)val | ((uint64)typeID << 47);
-    return ret;
-}
-
-Value nanPackInt32(int32 a) {
-    uint32 u = *(uint32 *)&a;
-    return nanPack(u, LISPIS_INT32);
-}
-
-Value nanPackSymbolIdx(uint32 s) {
-    return nanPack(s, LISPIS_SYM_IDX);
-}
-
-Value nanPackDouble(double d) {
-    Value ret;
-    ret.f64 = d;
-    return ret;
-}
-
-Value nanPackBoolean(bool b) {
-    return nanPack(b, LISPIS_BOOLEAN);
-}
-
 void allocBytecode(LispisState *state, LispisFunction *func) {
     if (func->bytecodeTop == func->bytecodeSize) {
         func->bytecodeSize = func->bytecodeSize * 1.5f;
@@ -181,15 +144,13 @@ void compileLambdaParamsRec(LispisState *state, LispisFunction *func,
     } else if (varargs && params->next) {
         pushOp(state, func, OP_COLLECT_VARARGS);
         pushInt32(state, func, numFormal);
-        assert(params->next->val->exprType == EXPR_SYMBOL_ID);
-        pushOp(state, func, OP_PUSH);
-        pushSymbol(state, func, params->next->val->symbolID);
+        assert(params->next->val->exprType == EXPR_VARIABLE);
         pushOp(state, func, OP_SET_LOCAL);
+        pushUint64(state, func, params->next->val->var.variableID);
     }
-    assert(params->val->exprType == EXPR_SYMBOL_ID);
-    pushOp(state, func, OP_PUSH);
-    pushSymbol(state, func, params->val->symbolID);
+    assert(params->val->exprType == EXPR_VARIABLE);
     pushOp(state, func, OP_SET_LOCAL);
+    pushUint64(state, func, params->val->var.variableID);
 }
 
 void compileLambdaParams(LispisState *state, LispisFunction *func,
@@ -211,10 +172,9 @@ void compileLambdaParams(LispisState *state, LispisFunction *func,
                 pushOp(state, func, OP_POP_ASSERT_LESS_OR_EQUAL);
                 pushOp(state, func, OP_COLLECT_VARARGS);
                 pushInt32(state, func, 0);
-                assert(params->val->exprType == EXPR_SYMBOL_ID);
-                pushOp(state, func, OP_PUSH);
-                pushSymbol(state, func, params->val->symbolID);
+                assert(params->val->exprType == EXPR_VARIABLE);
                 pushOp(state, func, OP_SET_LOCAL);
+                pushUint64(state, func, params->val->var.variableID);
             }
         }
     } else {
@@ -404,14 +364,31 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
             pushDouble(state, func, expr->doubleVal);
         } break;
         case EXPR_VARIABLE: {
-            pushOp(state, func, OP_PUSH);
-            pushSymbol(state, func, expr->var.symbolID);
-            pushOp(state, func, OP_EVAL_SYMBOL);
+            switch (expr->var.kind) {
+                case VAR_GLOBAL: {
+                    pushOp(state, func, OP_PUSH);
+                    pushSymbol(state, func, expr->var.symbolID);
+                    pushOp(state, func, OP_PUSH_GLOBAL);
+                } break;
+                case VAR_LOCAL: {
+                    pushOp(state, func, OP_PUSH_LOCAL);
+                    pushUint64(state, func, expr->var.variableID);
+                } break;
+                case VAR_UPVAL: {
+                    pushOp(state, func, OP_PUSH_UPVAL);
+                    pushUint64(state, func, expr->var.variableID);
+                    func->upvalProtos[expr->var.variableID].depth =
+                        expr->var.depth;
+                    func->upvalProtos[expr->var.variableID].index =
+                        expr->var.index;
+                } break;
+                default: assert(false);
+            }
         } break;
         case EXPR_SYMBOL_ID: {
             pushOp(state, func, OP_PUSH);
             pushSymbol(state, func, expr->symbolID);
-            pushOp(state, func, OP_EVAL_SYMBOL);
+            pushOp(state, func, OP_PUSH_GLOBAL);
         } break;
         case EXPR_CALL: {
             uint64 numArgs = 0;
@@ -433,16 +410,18 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
             printf("Macro %u\n", expr->macro.name);
             dumpBytecode(state, newMacro);
 #endif
+            newMacro->upvalProtos = 0;
+            newMacro->upvalProtosSize = 0;
+            newMacro->numLocals = expr->macro.numLocals;
 
             LispisFunctionObject *macroObj =
                 (LispisFunctionObject *)callocGcObject(state,
                                                        sizeof(LispisFunctionObject));
             macroObj->header.type = GC_LISPIS_FUNCTION_OBJECT;
             macroObj->function = newMacro;
-            macroObj->parentEnv = &state->globalEnviroment;
-            setVariableRaw(state, &state->globalEnviroment,
-                           nanPackPointer(macroObj, LISPIS_LFUNC),
-                           expr->macro.name);
+            macroObj->parentEnv = 0;
+            setGlobal(state, nanPackPointer(macroObj, LISPIS_LFUNC),
+                      expr->macro.name);
                            
         } break;
         case EXPR_LAMBDA: {
@@ -450,25 +429,36 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
             // FIX
             pushUint64(state, func, func->subFunctionsLength);
             LispisFunction *newFunc = startNewLambda(state, func);
+            newFunc->closedOver = expr->lambda.closedOver;
             newFunc->macro = false;
+            newFunc->upvalProtos = 0;
+            newFunc->upvalProtosSize = 0;
+            if (expr->lambda.numUpvals) {
+                newFunc->upvalProtosSize = expr->lambda.numUpvals;
+                newFunc->upvalProtos =
+                    (UpvalProto *)calloc(newFunc->upvalProtosSize,
+                                         sizeof(UpvalProto));
+            }
             compileLambdaParams(state, newFunc, expr->lambda.params,
-                                expr->lambda.paramsCount, expr->lambda.varargs);
+                                expr->lambda.paramsCount,
+                                expr->lambda.varargs);
             compileLambdaBody(state, newFunc, expr->lambda.body);
+            newFunc->numLocals = expr->lambda.numLocals;
             //encodeSymbolSection(state, newFunc);
         } break;
         case EXPR_DEFINE: {
             compileExpression(state, func, expr->value);
             pushOp(state, func, OP_PUSH);
-            pushSymbol(state, func, expr->variable->symbolID);
+            pushSymbol(state, func, expr->variable->var.symbolID);
             pushOp(state, func, OP_SET_GLOBAL);
             // makes let! return the value, prob. pretty slow...
             compileExpression(state, func, expr->variable);
         } break;
         case EXPR_LET: {
             compileExpression(state, func, expr->value);
-            pushOp(state, func, OP_PUSH);
-            pushSymbol(state, func, expr->variable->symbolID);
             pushOp(state, func, OP_SET_LOCAL);
+            pushUint64(state, func, expr->variable->var.variableID);
+            //pushOp(state, func, OP_SET_LOCAL);
             // makes let! return the value, prob. pretty slow...
             compileExpression(state, func, expr->variable);
         } break;

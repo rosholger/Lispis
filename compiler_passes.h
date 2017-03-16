@@ -8,6 +8,8 @@ struct LexicalScope {
     LexicalScope *parentScope;
     uint32 variableIDs[256]; // TODO: variable size? yes? no?
     uint32 variableIDsTop;
+    uint32 upvalsTop;
+    bool closedOver;
 };
 
 // IN ORDER!!!!

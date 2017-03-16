@@ -2,6 +2,8 @@
 #define COMMON_H
 
 #include "config.h"
+#include <cassert>
+#include <cmath>
 
 #define arrayLength(array) (sizeof(array)/sizeof(*array))
 
@@ -27,10 +29,10 @@ enum OpCodes {
     OP_RETURN,
     OP_SYMBOL_SECTION,
     OP_LIST,
-    OP_EVAL_SYMBOL,
-    OP_GET_LOCAL,
-    OP_GET_GLOBAL,
-    OP_GET_UPVAL,
+    //OP_EVAL_SYMBOL,
+    OP_PUSH_LOCAL,
+    OP_PUSH_GLOBAL,
+    OP_PUSH_UPVAL,
     OP_CLEAR_STACK,
     OP_POP_ASSERT_EQUAL,
     OP_POP_ASSERT_LESS_OR_EQUAL,
@@ -98,18 +100,109 @@ typedef Bytecode Value;
 
 void printValue(SymbolTable *globalSymbolTable,
                 Value v);
-NanPackingTypes getType(Value v);
-int32 unpackInt(Value v);
-uint32 unpackSymbolID(Value v);
-bool unpackBoolean(Value v);
-void *unpackPointer(Value v, NanPackingTypes typeID);
-Value nanPack(uint32 val, uint32 typeID);
-Value nanPackInt32(int32 a);
-Value nanPackDouble(double d);
-Value nanPackSymbolIdx(uint32 s);
-Value nanPackPointer(void *p, uint32 typeID);
-Value nanPackBoolean(bool b);
 // after symbolIdPass, NOT after the following passes
 Value exprToConsList(LispisState *state, Expr *expr);
 Expr *consListToExpr(LispisState *state, Value consList, int line);
+
+inline
+NanPackingTypes getType(Value v) {
+    uint64 retI = v.ui64;
+    uint64 type = LISPIS_DOUBLE;
+    if (v.f64 != v.f64) {
+        type = ((retI) >> 47) & 0xf;
+    }
+    return (NanPackingTypes)type;
+}
+
+struct Pair;
+
+inline
+int32 unpackInt(Value v) {
+    assert(getType(v) == LISPIS_INT32);
+    return v.i32;
+}
+
+inline
+bool unpackBoolean(Value v) {
+    assert(getType(v) == LISPIS_BOOLEAN);
+    return (bool)v.ui32;
+}
+
+inline
+uint32 unpackSymbolID(Value v) {
+    assert(getType(v) == LISPIS_SYM_IDX);
+    return v.ui32;
+}
+
+inline
+void *unpackPointer(Value v, NanPackingTypes typeID) {
+    uint64 unpacked = v.ui64 & 0xFFFFFFFFFFF;
+    assert(getType(v) == typeID);
+    // TODO: Do i need this?
+    //if (unpacked > 0x00008FFFFFFFFFFF) {
+    //unpacked |= 0xFFFF000000000000;
+    //}
+    return (void *)unpacked;
+}
+
+struct CFunction;
+struct LispisFunctionObject;
+
+inline
+Pair *unpackCons(Value v) {
+    return (Pair *)unpackPointer(v, LISPIS_CONS);
+}
+
+inline
+CFunction *unpackCFunc(Value v) {
+    return (CFunction *)unpackPointer(v, LISPIS_CFUNC);
+}
+
+inline
+LispisFunctionObject *unpackLFunc(Value v) {
+    return (LispisFunctionObject *)unpackPointer(v, LISPIS_LFUNC);
+}
+
+inline
+Value nanPackPointer(void *p, uint32 typeID) {
+    double nan = NAN;
+    uint64 retI = (0xFFFFFFFFFFFF & ((uint64)p));
+    uint64 nanVal = ((*(uint64 *)&nan) |
+                     retI |
+                     ((uint64)typeID << 47));
+    Value ret;
+    ret.ui64 = nanVal;
+    return ret;
+}
+
+inline
+Value nanPack(uint32 val, uint32 typeID) {
+    Value ret;
+    ret.f64 = NAN;
+    ret.ui64 |= (uint64)val | ((uint64)typeID << 47);
+    return ret;
+}
+
+inline
+Value nanPackInt32(int32 a) {
+    uint32 u = *(uint32 *)&a;
+    return nanPack(u, LISPIS_INT32);
+}
+
+inline
+Value nanPackSymbolIdx(uint32 s) {
+    return nanPack(s, LISPIS_SYM_IDX);
+}
+
+inline
+Value nanPackDouble(double d) {
+    Value ret;
+    ret.f64 = d;
+    return ret;
+}
+
+inline
+Value nanPackBoolean(bool b) {
+    return nanPack(b, LISPIS_BOOLEAN);
+}
 #endif

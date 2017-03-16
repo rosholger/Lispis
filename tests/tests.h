@@ -18,14 +18,6 @@
 #include <cstdio>
 
 inline
-uint32 internCStr(LispisState *state, const char *cstr) {
-    String str;
-    str.val = (char *)cstr;
-    str.length = strlen(cstr);
-    return internSymbol(state, str, hashFunc(str));
-}
-
-inline
 bool deepEqual(Value a, Value b) {
     if (a.ui64 == b.ui64) {
         return true;

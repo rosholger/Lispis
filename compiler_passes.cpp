@@ -57,7 +57,7 @@ Expr *symbolIdPass(LispisState *state, Expr *expr) {
 }
 
 bool isMacro(LispisState *state, uint32 symbolID) {
-    Env *env = &state->globalEnviroment;
+    GlobalEnv *env = &state->globalEnviroment;
     uint32 variableID = symbolID % env->variablesSize;
     uint32 startID = variableID;
     while (env->variables[variableID].symbolID != symbolID) {
@@ -83,8 +83,7 @@ Expr *evalMacro(LispisState *state, Expr *expr) {
         push(state, exprToConsList(state, arg->val));
     }
     Value ret = runFunction(state,
-                            evalGlobalSymbol(&state->globalEnviroment,
-                                             expr->callee->symbolID),
+                            getGlobal(state, expr->callee->symbolID),
                             numArgs);
 #if LOG_ENABLED
     printValue(&state->globalSymbolTable, ret);
@@ -394,9 +393,27 @@ Expr *copyQuasiquoted(LispisState *state, Expr *expr,
                 (QuasiquoteList *)calloc(1, sizeof(QuasiquoteList));
             if (expr->quasiquoteList->val) {
                 *ret->quasiquoteList = *expr->quasiquoteList;
-                ret->quasiquoteList->val =
-                    copyQuasiquoted(state, expr->quasiquoteList->val,
-                                    pass1, pass2, scope);
+                if (expr->quasiquoteList->unquoted ||
+                    expr->quasiquoteList->unquoteSpliced) {
+                    *ret->quasiquoteList = *expr->quasiquoteList;
+                    if (pass1) {
+                        assert(!pass2);
+                        assert(!scope);
+                        ret->quasiquoteList->val =
+                            pass1(state, expr->quasiquoteList->val);
+                    } else {
+                        assert(pass2);
+                        assert(scope);
+                        assert(!pass1);
+                        ret->quasiquoteList->val =
+                            pass2(state, expr->quasiquoteList->val,
+                                  scope);
+                    }
+                } else {
+                    ret->quasiquoteList->val =
+                        copyQuasiquoted(state, expr->quasiquoteList->val,
+                                        pass1, pass2, scope);
+                }
                 ret->quasiquoteList->next = 0;
                 QuasiquoteList *prev = ret->quasiquoteList;
                 for (QuasiquoteList *elem = expr->quasiquoteList->next;
@@ -452,6 +469,8 @@ Expr *macroPass(LispisState *state, Expr *expr) {
             *ret = *expr;
             if (expr->callee && expr->callee->exprType == EXPR_SYMBOL_ID) {
                 if (expr->callee->symbolID == defmacro) {
+                    ret->macro.numLocals = 0;
+                    ret->macro.numUpvals = 0;
                     ret->exprType = EXPR_MACRO;
                     ret->line = expr->line;
                     ret->macro.params = 0;
@@ -632,6 +651,8 @@ Expr *lambdaPass(LispisState *state, Expr *expr) {
             *ret = *expr;
             if (expr->callee && expr->callee->exprType == EXPR_SYMBOL_ID) {
                 if (expr->callee->symbolID == lambda) {
+                    ret->lambda.numLocals = 0;
+                    ret->lambda.numUpvals = 0;
                     ret->exprType = EXPR_LAMBDA;
                     ret->line = expr->line;
                     ret->lambda.params = 0;
@@ -1021,6 +1042,59 @@ Expr *ifPass(LispisState *state, Expr *expr) {
     return ret;
 }
 
+void addVariable(LexicalScope *scope, uint32 symbolID) {
+    for (uint32 i = 0; i < scope->variableIDsTop; ++i) {
+        if (scope->variableIDs[i] == symbolID) {
+            return;
+        }
+    }
+    scope->variableIDs[scope->variableIDsTop] = symbolID;
+    scope->variableIDsTop++;
+}
+
+LexicalVariable getVariable(LexicalScope *scope, uint32 symbolID) {
+    LexicalVariable ret = {};
+    ret.symbolID = symbolID;
+    ret.kind = VAR_GLOBAL;
+    bool found = false;
+    for (uint32 i = 0; i < scope->variableIDsTop; ++i) {
+        if (scope->variableIDs[i] == ret.symbolID) {
+            found = true;
+            ret.kind = VAR_LOCAL;
+            ret.variableID = i;
+            return ret;
+        }
+    }
+    if (!found) {
+        uint32 depth = 0;
+        for (LexicalScope *searchedScope = scope->parentScope;
+             searchedScope;
+             searchedScope = searchedScope->parentScope) {
+            depth++;
+            for (uint32 i = 0;
+                 i < searchedScope->variableIDsTop;
+                 ++i) {
+                if (searchedScope->variableIDs[i] ==
+                    ret.symbolID) {
+                    ret.kind = VAR_UPVAL;
+                    ret.variableID = scope->upvalsTop;
+                    ret.depth = depth;
+                    ret.index = i;
+                    scope->upvalsTop++;
+                    return ret;
+                }
+            }
+        }
+        // returns if found, that has to be fixed
+        //LexicalScope *s = scope->parentScope;
+        //for (uint32 i = 0; i < depth; ++i) {
+        //s->closedOver=true;
+        //s = s->parentScope;
+        //}
+    }
+    return ret;
+}
+
 Expr *variablePass(LispisState *state, Expr *expr, LexicalScope *scope) {
     Expr *ret = 0;
     switch (expr->exprType) {
@@ -1037,33 +1111,7 @@ Expr *variablePass(LispisState *state, Expr *expr, LexicalScope *scope) {
             ret = (Expr *)malloc(sizeof(Expr));
             *ret = *expr;
             ret->exprType = EXPR_VARIABLE;
-            ret->var.symbolID = expr->symbolID;
-            ret->var.kind = VAR_GLOBAL;
-            bool found = false;
-            for (uint32 i = 0; i < scope->variableIDsTop; ++i) {
-                if (scope->variableIDs[i] == ret->var.symbolID) {
-                    found = true;
-                    ret->var.kind = VAR_LOCAL;
-                    ret->var.variableID = i;
-                    break;
-                }
-            }
-            if (!found) {
-                for (LexicalScope *searchedScope = scope->parentScope;
-                     searchedScope;
-                     searchedScope = searchedScope->parentScope) {
-                    for (uint32 i = 0;
-                         i < searchedScope->variableIDsTop;
-                         ++i) {
-                        if (searchedScope->variableIDs[i] ==
-                            ret->var.symbolID) {
-                            ret->var.kind = VAR_UPVAL;
-                            ret->var.variableID = i;
-                            break;
-                        }
-                    }
-                }
-            }
+            ret->var = getVariable(scope, expr->symbolID);
         } break;
         case EXPR_QUOTE: {
             ret = (Expr *)malloc(sizeof(Expr));
@@ -1073,44 +1121,96 @@ Expr *variablePass(LispisState *state, Expr *expr, LexicalScope *scope) {
         case EXPR_MACRO: {
             ret = (Expr *)malloc(sizeof(Expr));
             *ret = *expr;
-            ret->macro.params = copyMacroParams(state, expr->macro.params);
+            //ret->macro.params = copyMacroParams(state,
+            //expr->macro.params);
+            ret->macro.params = 0;
             LexicalScope macroScope = {};
             macroScope.parentScope = scope;
-            for (ExprList *params = ret->macro.params; params;
-                 params = params->next) {
-                macroScope.variableIDs[macroScope.variableIDsTop] =
-                    params->val->symbolID;
-                macroScope.variableIDsTop++;
+            if (expr->macro.params) {
+                ExprList *retParams =
+                    (ExprList *)malloc(sizeof(ExprList));
+                ExprList *prev = retParams;
+                addVariable(&macroScope,
+                            expr->macro.params->val->symbolID);
+                prev->val = variablePass(state,
+                                         expr->macro.params->val,
+                                         &macroScope);
+                prev->next = 0;
+                for (ExprList *params = expr->macro.params->next;
+                     params;
+                     params = params->next) {
+                    addVariable(&macroScope, params->val->symbolID);
+                    prev->next = (ExprList *)malloc(sizeof(ExprList));
+                    prev = prev->next;
+                    prev->val = variablePass(state,
+                                             params->val,
+                                             &macroScope);
+                    prev->next = 0;
+                }
+                ret->macro.params = retParams;
+            } else {
+                ret->macro.params = 0;
             }
             ret->macro.body = copyMacroBody(state, expr->macro.body,
                                             0, variablePass, &macroScope);
+            ret->macro.numLocals = macroScope.variableIDsTop;
+            ret->macro.numUpvals = 0;
         } break;
         case EXPR_LAMBDA: {
             ret = (Expr *)malloc(sizeof(Expr));
             *ret = *expr;
-            ret->lambda.params = copyLambdaParams(state,
-                                                  expr->lambda.params);
+            //ret->lambda.params = copyLambdaParams(state,
+            //expr->lambda.params);
+            ret->lambda.params = 0;
             LexicalScope lambdaScope = {};
             lambdaScope.parentScope = scope;
-            for (ExprList *params = ret->lambda.params; params;
-                 params = params->next) {
-                lambdaScope.variableIDs[lambdaScope.variableIDsTop] =
-                    params->val->symbolID;
-                lambdaScope.variableIDsTop++;
+            if (expr->lambda.params) {
+                ExprList *retParams =
+                    (ExprList *)malloc(sizeof(ExprList));
+                ExprList *prev = retParams;
+                addVariable(&lambdaScope,
+                            expr->lambda.params->val->symbolID);
+                prev->val = variablePass(state,
+                                         expr->lambda.params->val,
+                                         &lambdaScope);
+                assert(prev->val->exprType == EXPR_VARIABLE);
+                prev->next = 0;
+                for (ExprList *params = expr->lambda.params->next;
+                     params;
+                     params = params->next) {
+                    addVariable(&lambdaScope, params->val->symbolID);
+                    prev->next = (ExprList *)malloc(sizeof(ExprList));
+                    prev = prev->next;
+
+                    prev->val = variablePass(state,
+                                             params->val,
+                                             &lambdaScope);
+                    prev->next = 0;
+                }
+                ret->lambda.params = retParams;
+            } else {
+                ret->lambda.params = 0;
             }
             ret->lambda.body = copyLambdaBody(state, expr->lambda.body,
                                               0, variablePass,
                                               &lambdaScope);
+            ret->lambda.numLocals = lambdaScope.variableIDsTop;
+            ret->lambda.numUpvals = lambdaScope.upvalsTop;
+            ret->lambda.closedOver = lambdaScope.closedOver;
         } break;
-        case EXPR_DEFINE:
+        case EXPR_DEFINE: {
+            ret = (Expr *)malloc(sizeof(Expr));
+            *ret = *expr;
+            ret->variable = variablePass(state, expr->variable, scope);
+            //*ret->variable = *expr->variable;
+            ret->value = variablePass(state, expr->value, scope);
+        } break;
         case EXPR_LET: {
             ret = (Expr *)malloc(sizeof(Expr));
             *ret = *expr;
-            ret->variable = (Expr *)malloc(sizeof(Expr));
-            *ret->variable = *expr->variable;
-            scope->variableIDs[scope->variableIDsTop] =
-                ret->variable->symbolID;
-            scope->variableIDsTop++;
+            addVariable(scope, expr->variable->symbolID);
+            ret->variable = variablePass(state, expr->variable, scope);
+            //*ret->variable = *expr->variable;
             ret->value = variablePass(state, expr->value, scope);
         } break;
         case EXPR_CALL: {

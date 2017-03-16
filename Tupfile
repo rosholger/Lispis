@@ -1,4 +1,4 @@
-CFLAGS = -fno-strict-aliasing -Wall -pg
+CFLAGS = -fno-strict-aliasing -fno-omit-frame-pointer -Wall
 LOG = -DLOG_ENABLED=1
 !cc = |> g++ $(CFLAGS) $(LOG) -O0 -g -c %f -o %o |>
 

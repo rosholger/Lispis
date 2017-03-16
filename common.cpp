@@ -26,7 +26,13 @@ Value exprToConsList(LispisState *state, Expr *expr) {
         case EXPR_CALL: {
             Value args = exprListToConsList(state, expr->arguments,
                                             expr->dotted);
-            ret = cons(state, exprToConsList(state, expr->callee), args);
+            if (expr->callee) {
+                ret = cons(state,
+                           exprToConsList(state, expr->callee), args);
+            } else {
+                assert(unpackCons(args) == 0);
+                ret = args;
+            }
         } break;
         default:assert(false);
     }
@@ -183,6 +189,12 @@ void dumpTree(LispisState *state, Expr *node, int identLevel) {
                                            node->symbolID);
                 printf("%.*s", (int)symStr.length, symStr.val);
             } break;
+            case EXPR_VARIABLE: {
+                String symStr =
+                    globalSymbolIdToSymbol(&state->globalSymbolTable,
+                                           node->var.symbolID);
+                printf("%.*s", (int)symStr.length, symStr.val);
+            } break;
             case EXPR_CALL: {
                 printf("(");
                 if (node->callee) {
@@ -314,6 +326,7 @@ void dumpBytecode(LispisState *state, LispisFunction *func) {
     for (pc = 0; func->bytecode[pc].opCode != OP_EXIT; pc++) {
         assert(pc < func->bytecodeTop);
         OpCodes op = func->bytecode[pc].opCode;
+        printf("%03llu: ", pc);
         switch (op) {
             case OP_APPEND: {
                 printf("APPEND\n");
@@ -334,8 +347,16 @@ void dumpBytecode(LispisState *state, LispisFunction *func) {
             case OP_POP_ASSERT_EQUAL: {
                 printf("POP_ASSERT_EQUAL\n");
             } break;
-            case OP_EVAL_SYMBOL: {
-                printf("EVAL_SYMBOL\n");
+            case OP_PUSH_LOCAL: {
+                pc++;
+                printf("PUSH_LOCAL %llu\n", func->bytecode[pc].ui64);
+            } break;
+            case OP_PUSH_GLOBAL: {
+                printf("PUSH_GLOBAL\n");
+            } break;
+            case OP_PUSH_UPVAL: {
+                pc++;
+                printf("PUSH_UPVAL %llu\n", func->bytecode[pc].ui64);
             } break;
             case OP_LIST: {
                 printf("LIST\n");
@@ -364,8 +385,13 @@ void dumpBytecode(LispisState *state, LispisFunction *func) {
             case OP_SET_GLOBAL: {
                 printf("SET_GLOBAL\n");
             } break;
+            case OP_SET_UPVAL: {
+                pc++;
+                printf("SET_UPVAL %llu\n", func->bytecode[pc].ui64);
+            } break;
             case OP_SET_LOCAL: {
-                printf("SET_LOCAL\n");
+                pc++;
+                printf("SET_LOCAL %llu\n", func->bytecode[pc].ui64);
             } break;
             case OP_CALL: {
                 pc++;
@@ -495,18 +521,12 @@ uint64 hashFunc(String str) {
     return hash;
 }
 
-NanPackingTypes getType(Value v) {
-    uint64 retI = v.ui64;
-    uint64 type = LISPIS_DOUBLE;
-    if (v.f64 != v.f64) {
-        type = ((retI) >> 47) & 0xf;
-    }
-    return (NanPackingTypes)type;
-}
-
 void printValue(SymbolTable *globalSymbolTable,
                 Value v) {
     switch (getType(v)) {
+        case LISPIS_BOOLEAN: {
+            printf("%s\n", unpackBoolean(v) ? "true" : "false");
+        } break;
         case LISPIS_INT32: {
             printf("%d\n", unpackInt(v));
         } break;

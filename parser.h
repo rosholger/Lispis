@@ -41,6 +41,14 @@ struct QuasiquoteList {
     bool unquoteSpliced;
 };
 
+struct LexicalVariable {
+    uint32 variableID;
+    uint32 index; // if upval
+    uint32 symbolID;
+    uint32 depth;
+    VariableKind kind;
+};
+
 struct Expr {
     union {
         Expr *quoted; // QUOTE
@@ -62,13 +70,18 @@ struct Expr {
             ExprList *params;
             ExprList *body;
             int32 paramsCount;
+            uint32 numLocals; // includes params
+            uint32 numUpvals;
             bool varargs;
+            bool closedOver;
         } lambda;
         struct {
             uint32 name;
             ExprList *params;
             ExprList *body;
             int32 paramsCount;
+            uint32 numLocals; // includes params
+            uint32 numUpvals; // always 0
             bool varargs;
         } macro;
         struct {
@@ -76,11 +89,7 @@ struct Expr {
             Expr *trueBranch;
             Expr *falseBranch; // may be null
         };
-        struct {
-            uint32 variableID;
-            uint32 symbolID;
-            VariableKind kind;
-        } var;
+        LexicalVariable var;
     };
     bool dotted;
     ExprType exprType;

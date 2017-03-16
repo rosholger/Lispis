@@ -45,6 +45,9 @@ int main(int argsc, char **args) {
         lambdaClosing,
         facTest,
         listFuncTest,
+        multipleUpvals,
+        innerRecursive,
+        multiLevelUpval,
         //macro_tests
         letfunTest,
         defunTest,

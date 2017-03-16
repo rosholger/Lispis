@@ -60,3 +60,42 @@ TEST(listFuncTest) {
     t_assert("list function",
              deepEqual(runFunction(&state, lstFunc, 4), lst));
 }
+
+TEST(multipleUpvals) {
+    TEST_SETUP;
+    RUN_STR(ret,
+            "(letfun! test1 ()"
+            "  (let! a 1)"
+            "  (let! b 2)"
+            "  (letfun! test2 ()"
+            "    b)"
+            "  (test2))"
+            "(test1)");
+    t_assert("multiple upvals", unpackInt(ret) == 2);
+}
+
+TEST(innerRecursive) {
+    TEST_SETUP;
+    RUN_STR(ret,
+            "(letfun! t1 ()"
+            "  (let! a 1)"
+            "  (letfun! t2 (n)"
+            "    (if (< n 2)"
+            "      1"
+            "      (+ (t2 (- n 1)) 1)))"
+            "  (t2 4))"
+            "(t1)");
+    t_assert("inner recursive", unpackInt(ret) == 4);
+}
+
+TEST(multiLevelUpval) {
+    TEST_SETUP;
+    RUN_STR(ret,
+            "(let! a 1)"
+            "(letfun! t1 ()"
+            "  (letfun! t2 ()"
+            "    a)"
+            "  (t2))"
+            "(t1)");
+    t_assert("multi-level upval", unpackInt(ret) == 1);
+}

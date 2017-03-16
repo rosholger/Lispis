@@ -292,8 +292,7 @@ void initStdLib(LispisState *state) {
     undef.val = (char *)"undefined";
     undef.length = strlen(undef.val);
     uint32 undefID = internSymbol(state, undef, hashFunc(undef));
-    setVariableRaw(state, &state->globalEnviroment,
-                   nanPack(0, LISPIS_UNDEF), undefID);
+    setGlobal(state, nanPack(0, LISPIS_UNDEF), undefID);
 
     runNullTerminatedString(state,
                             (char *)

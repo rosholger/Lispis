@@ -113,7 +113,7 @@ void incRef(LispisState *state, GcObjectHeader *obj) {
 }
 #endif
 
-
+#if 0
 void dumpEnviroment(SymbolTable *globalSymbolTable,
                     LispisFunction *func,
                     Env *env) {
@@ -132,6 +132,7 @@ void dumpEnviroment(SymbolTable *globalSymbolTable,
     }
     dumpEnviroment(globalSymbolTable, func, env->parentEnv);
 }
+#endif
 
 #if 0
 void decRefAllInEnv(LispisState *state, Env *env) {
@@ -217,9 +218,10 @@ int main(int argsc, char **args) {
     printf("ret val:\n");
     printValue(&state.globalSymbolTable,
                retVal);
+    //freeze(&state, &unpackLFunc(retVal)->header);
     Value ret;
     for (int i = 0; i < 1000; ++i) {
-        push(&state, nanPackInt32(16));
+        push(&state, nanPackInt32(12));
         ret = runFunction(&state, retVal, 1);
         clearStack(&state);
         printf("ret val:\n");

@@ -33,3 +33,6 @@ lispis
 
 vgcore.*
 \#*\#
+callgrind.*
+perf.*
+.\#*
