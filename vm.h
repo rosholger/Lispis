@@ -150,6 +150,7 @@ struct KeyValPair {
 
 struct Object {
     GcObjectHeader header;
+    Object *proto;
     int32 size;
     KeyValPair *elems;
 };

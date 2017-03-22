@@ -13,9 +13,17 @@
 ;(let! r 0);
 ;(:! v ,r 10)
 ;(: v ,r)
-(let! a 'z)
-(let! obj {(,a 1) (b 2) (c 3)})
 
-(: obj a)
+;(let! coordinate {(+ (lambda (this other)
+                       ;{(x (+ (: this x) (: other x)))
+                        ;(y (+ (: this y) (: other y)))}))
+                  ;(type 'coordinate)})
+;
+;(let! v1 {(*proto* coordinate) (x 10) (y 20)})
+;(let! v2 {(*proto* coordinate) (x 5) (y 15)})
+;
+;(+ v1 v2)
 
-(+ (: obj z) (: obj b))
+(let! obj {(*proto* {(a 100)}) (b 10)})
+(:! obj a 10)
+(+ (: obj a) (: obj b))

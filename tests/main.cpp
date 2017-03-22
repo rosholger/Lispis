@@ -82,6 +82,10 @@ int main(int argsc, char **args) {
         unquotedObjectKey,
         unquotedObjectKeyInMacro,
         wrongObjectKey,
+        basicObjectProto,
+        basicObjectProto2,
+        basicObjectProto3,
+        basicObjectProto4,
     };
     int numSuccess = 0;
     for (uint64 i = 0; i < arrayLength(tests); ++i) {

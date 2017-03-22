@@ -416,6 +416,66 @@ void pushCActivationRecord(LispisState *state, uint64 numArgs) {
     state->currRecord = record;
 }
 
+uint32 protoSym;
+
+inline
+void setObjectElem(LispisState *state,
+                   Object *object, uint32 key, Value value) {
+    writeBarrier(state, &object->header);
+    if (key == protoSym) {
+        pushError(state, getType(value) == LISPIS_OBJECT,
+                  "object-*prototype*-has-to-be-an-object");
+        Object *proto = unpackObject(value);
+        object->proto = proto;
+    }
+    uint32 id = key % object->size;
+    // HASH
+    uint32 startID = id;
+    while (object->elems[id].filled &&
+           object->elems[id].key != key) {
+        id++;
+        id = id % object->size;
+        pushError(state, id != startID,
+                  "object-expansion-not-yet-implemented");
+    }
+    object->elems[id].val = value;
+    object->elems[id].key = key;
+    object->elems[id].filled = true;
+}
+
+// returns LISPIS_UNDEF if no value is found
+Value getObjectElem(Object *object, uint32 key) {
+    if (key == protoSym) {
+        if (object->proto) {
+            return nanPackPointer(object->proto, LISPIS_OBJECT);
+        } else {
+            return nanPack(0, LISPIS_UNDEF);
+        }
+    }
+    uint32 id = key % object->size;
+    // HASH
+    uint32 startID = id;
+    bool found = true;
+    while (!object->elems[id].filled ||
+           object->elems[id].key != key) {
+        id++;
+        id = id % object->size;
+        if (id == startID) {
+            found = false;
+            break;
+        }
+    }
+    if (!found || !object->elems[id].filled) {
+        if (!object->proto) {
+            return nanPack(0, LISPIS_UNDEF);
+        } else {
+            return getObjectElem(object->proto, key);
+        }
+    } else {
+        return object->elems[id].val;
+    }
+}
+
 void runFunctionInternal(LispisState *state, Value funcObjValue,
                          uint64 numArgs) {
     pushError(state, numArgs <= state->dataStackTop,
@@ -632,21 +692,8 @@ void runFunctionInternal(LispisState *state, Value funcObjValue,
                               "objects-can-only-be-referenced-with-"
                               "integers");
                     Object *object = unpackObject(obj);
-                    writeBarrier(state, &object->header);
                     uint32 key = unpackSymbolID(ref);
-                    uint32 id = key % object->size;
-                    // HASH
-                    uint32 startID = id;
-                    while (object->elems[id].filled &&
-                           object->elems[id].key != key) {
-                        id++;
-                        id = id % object->size;
-                        pushError(state, id != startID,
-                                  "object-expansion-not-yet-implemented");
-                    }
-                    object->elems[id].val = value;
-                    object->elems[id].key = key;
-                    object->elems[id].filled = true;
+                    setObjectElem(state, object, key, value);
                     pushInternal(state, obj);
                 } else {
                     pushError(state, false,
@@ -671,24 +718,7 @@ void runFunctionInternal(LispisState *state, Value funcObjValue,
                               "integers");
                     Object *object = unpackObject(obj);
                     uint32 key = unpackSymbolID(ref);
-                    uint32 id = key % object->size;
-                    // HASH
-                    uint32 startID = id;
-                    bool found = true;
-                    while (!object->elems[id].filled ||
-                           object->elems[id].key != key) {
-                        id++;
-                        id = id % object->size;
-                        if (id == startID) {
-                            found = false;
-                            break;
-                        }
-                    }
-                    if (!found || !object->elems[id].filled) {
-                        pushInternal(state, nanPack(0, LISPIS_UNDEF));
-                    } else {
-                        pushInternal(state, object->elems[id].val);
-                    }
+                    pushInternal(state, getObjectElem(object, key));
                 } else {
                     pushError(state, false,
                               "you-can-only-get-elements-of-vectors");
@@ -1196,6 +1226,7 @@ void initState(LispisState *state) {
     // then we dont have to freeze it
     freeze(state, &state->currRecord->header);
 
+    protoSym = internCStr(state, "*proto*");
     setupSpecialFormSymbols(state);
 }
 

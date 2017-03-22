@@ -45,10 +45,15 @@ enum OpCodes {
     OP_ALLOC_VECTOR,
     OP_SET_ELEM,
     OP_PUSH_ELEM,
+    // optimization, (refset obj '*proto*) gets compiled to this
+    // OP_SET_ELEM where elem is *proto* also sets the proto
+    OP_SET_PROTO,
+    // optimization, (ref obj '*proto*) gets compiled to this
+    // OP_PUSH_ELEM where elem is *proto* also pushes the proto
+    OP_PUSH_PROTO, //optimization (
 };
 
-// TODO: switch all cases of bytecode from uint64 * to Bytecode *
-// TODO: typedef Bytecode as Value
+// TODO: switch all cases of bytecode from uint64 * to Bytecode *. done?
 union Bytecode {
     uint64 ui64;
     int64 i64;

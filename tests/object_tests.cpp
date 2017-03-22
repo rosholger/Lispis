@@ -55,3 +55,40 @@ TEST(wrongObjectKey) {
             "(: {(a 10)} z)");
     t_assert("wrong object key", s && getType(res) == LISPIS_UNDEF);
 }
+
+TEST(basicObjectProto) {
+    TEST_SETUP;
+    RUN_STR(res, s,
+            "(let! obj {(*proto* {(a 100)}) (b 10)})"
+            "(+ (: obj a) (: obj b))");
+    t_assert("basic object proto", s && unpackInt(res) == 110);
+}
+
+TEST(basicObjectProto2) {
+    TEST_SETUP;
+    RUN_STR(res, s,
+            "(let! obj {(*proto* {(a 100)}) (b 10)})"
+            "(:! obj a 10)"
+            "(+ (: obj a) (: obj b))");
+    t_assert("basic object proto 2", s && unpackInt(res) == 20);
+}
+
+TEST(basicObjectProto3) {
+    TEST_SETUP;
+    RUN_STR(res, s,
+            "(let! proto {(a 100)})"
+            "(let! obj {(*proto* proto) (b 10)})"
+            "(:! obj a 10)"
+            "(+ (: proto a) (: obj b))");
+    t_assert("basic object proto 3", s && unpackInt(res) == 110);
+}
+
+TEST(basicObjectProto4) {
+    TEST_SETUP;
+    RUN_STR(res, s,
+            "(let! proto {(a 100)})"
+            "(let! obj {(*proto* proto) (b 10)})"
+            "(:! proto a 10)"
+            "(+ (: obj a) (: obj b))");
+    t_assert("basic object proto 4", s && unpackInt(res) == 20);
+}
