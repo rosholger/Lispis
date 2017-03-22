@@ -15,10 +15,18 @@ enum ExprType {
     EXPR_MACRO,
     EXPR_LIST,
     EXPR_LET,
+    EXPR_SET,
     EXPR_DEFINE,
     EXPR_IF,
     EXPR_SYMBOL_ID,
     EXPR_VARIABLE,
+    EXPR_VECTOR,
+    EXPR_OBJECT,
+    EXPR_KEY_VALUE_PAIR,
+    EXPR_FOR,
+    EXPR_DO,
+    EXPR_REF,
+    EXPR_REF_SET,
 };
 
 enum VariableKind {
@@ -56,13 +64,42 @@ struct Expr {
         String str; // SYMBOL, STRING
         int intVal; // INT
         double doubleVal; // FLOAT
-        ExprList *list; // QUOTED LIST
+        ExprList *list; // QUOTED LIST, DO
+        struct {
+            Expr *obj;
+            Expr *ref;
+        } ref;
+        struct {
+            Expr *obj;
+            Expr *ref;
+            Expr *val;
+        } refSet;
+        struct {
+            Expr *key;
+            Expr *val;
+            bool unquotedKey;
+        } keyValPair;
+        struct {
+            uint32 numElems;
+            ExprList *elems;
+        } obj;
+        struct {
+            uint32 numElems;
+            ExprList *elems; // VECTOR
+        } vec;
         QuasiquoteList *quasiquoteList; // QUASIQUOTED LIST
+        struct { // FOR (for (init pred upd) body)
+            Expr *init;
+            Expr *pred;
+            Expr *upd;
+            ExprList *body;
+            Expr *it;
+        };
         struct { // CALL (a b)
             Expr *callee;
             ExprList *arguments;
         };
-        struct { // LET (let! a 1) or DEFINE (define! a 1)
+        struct { // LET (let! a 1), SET (set! a 1) or DEFINE (define! a 1)
             Expr *variable;
             Expr *value;
         };
@@ -100,5 +137,8 @@ struct Lexer;
 Expr *parseExpression(Lexer *lexer);
 
 extern Expr quoteSym;
+extern Expr quasiquoteSym;
+extern Expr unquoteSym;
+extern Expr unquoteSpliceSym;
 
 #endif

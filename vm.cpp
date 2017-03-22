@@ -8,6 +8,50 @@
 #include <cstdio>
 #include <cstring>
 
+
+bool indexStack(LispisState *state, int64 i, Value *ret) {
+    try {
+        *ret = indexStackInternal(state, i);
+    } catch (int e) {
+        return false;
+    }
+    return true;
+}
+
+bool pop(LispisState *state, Value *ret) {
+    try {
+        *ret = popInternal(state);
+    } catch (int e) {
+        return false;
+    }
+    return true;
+}
+
+bool peek(LispisState *state, Value *ret) {
+    try {
+        *ret = peekInternal(state);
+    } catch (int e) {
+        return false;
+    }
+    return true;
+}
+
+bool push(LispisState *state, Value v) {
+    try {
+        pushInternal(state, v);
+    } catch (int e) {
+        return false;
+    }
+    return true;
+}
+
+void pushError(LispisState *state, bool onlyIfFalse, const char *str) {
+    if (!onlyIfFalse) {
+        pushInternal((state), nanPackSymbolIdx(internCStr((state), (str))));
+        throw 0;
+    }
+}
+
 void unlinkGcObject(LispisState *state, GcObjectHeader *header) {
     if (state->firstGcObject == header) {
         state->firstGcObject = header->next;
@@ -48,16 +92,17 @@ bool isNill(Value v) {
     return getType(v) == LISPIS_CONS && !unpackCons(v);
 }
 
-void setLocal(Env *env,
+void setLocal(LispisState *state,
+              Env *env,
               Value v, uint32 index) {
-    assert(index < env->variablesSize);
-    assert(env->variables);
+    assert(index < env->variablesSize && "ICE-illegal-local-index");
+    assert(env->variables && "ICE-env->variables=0");
     env->variables[index].filled = true;
     env->variables[index].val = v;
 }
 
-void setUpval(Value v, Upval upval) {
-    setLocal(upval.env, v, upval.index);
+void setUpval(LispisState *state, Value v, Upval upval) {
+    setLocal(state, upval.env, v, upval.index);
 }
 
 void setGlobal(LispisState *state, Value v, uint32 symbolID) {
@@ -192,34 +237,6 @@ uint32 internSymbol(LispisState *state, String symbol, uint64 symHash) {
     return st->symbols[stIndex].globalSymbolID;
 }
 
-#if 0
-Bytecode *loadSymbolSection(LispisState *state,
-                            LispisFunction *func,
-                            Bytecode *startBytecode) {
-    Bytecode *bytecode = startBytecode;
-    uint64 size = bytecode->ui64;
-    bytecode++;
-    for (uint64 i = 0; i < size; ++i) {
-        int32 length = unpackInt(*bytecode);
-        bytecode++;
-        if (length) {
-            uint32 id = bytecode->ui32;
-            bytecode++;
-            String sym;
-            sym.val = bytecode->c;
-            sym.length = length;
-            loadLocalSymbolRaw(state, func, sym, id);
-            bytecode = bytecode + length / 8 + (length % 8 == 0 ? 0 : 1);
-        } else {
-            assert(false);
-        }
-    }
-    return bytecode;
-}
-#endif
-
-#define assertStackInBounds(state, value)                               \
-    assert((value) >= (state)->currRecord->dataStackBottom)
 
 Value cons(LispisState *state, Value ncar, Value ncdr) {
     Pair *pair = (Pair *)callocGcObject(state, sizeof(Pair));
@@ -233,14 +250,16 @@ Value cons(LispisState *state, Value ncar, Value ncdr) {
     return nanPackPointer(pair, LISPIS_CONS);
 }
 
-Value getLocal(Env *env, uint32 index) {
-    assert(index < env->variablesSize);
-    assert(env->variables[index].filled);
+Value getLocal(LispisState *state, Env *env, uint32 index) {
+    assert(index < env->variablesSize && "ICE-illegal-local-index");
+    assert(env->variables[index].filled &&
+           "ICE-local-variable-"
+           "accessed-before-assigned");
     return env->variables[index].val;
 }
 
-Value getUpval(Upval upval) {
-    return getLocal(upval.env, upval.index);
+Value getUpval(LispisState *state, Upval upval) {
+    return getLocal(state, upval.env, upval.index);
 }
 
 Value getGlobal(LispisState *state, uint32 globalSymbolID) {
@@ -255,30 +274,11 @@ Value getGlobal(LispisState *state, uint32 globalSymbolID) {
             break;
         }
     }
-    if (!env->variables[variableID].filled) {
-        assert(!"Variable undefined");
-    }
+        pushError(state,
+                  env->variables[variableID].filled,
+                  "variable-undefined");
     return env->variables[variableID].val;
 }
-
-#if 0
-Value evalGlobalSymbol(Env *env, uint32 globalSymbolID) {
-    assert(env && "Variable undefined");
-    uint32 variableID = globalSymbolID % env->variablesSize;
-    uint32 startID = variableID;
-    while (env->variables[variableID].symbolID != globalSymbolID) {
-        variableID++;
-        variableID = variableID % env->variablesSize;
-        if (variableID == startID) {
-            break;
-        }
-    }
-    if (!env->variables[variableID].filled) {
-        return evalGlobalSymbol(env->parentEnv, globalSymbolID);
-    }
-    return env->variables[variableID].val;
-}
-#endif
 
 String globalSymbolIdToSymbol(SymbolTable *globalSymbolTable,
                               uint32 globalSymbolId) {
@@ -378,13 +378,15 @@ Value symbolFromString(LispisState *state, String str) {
 }
 
 Value internalAppend(LispisState *state, Value r, Value l) {
-    assert(getType(r) == LISPIS_CONS);
-    assert(getType(l) == LISPIS_CONS);
+    pushError(state,
+              getType(r) == LISPIS_CONS && getType(l) == LISPIS_CONS,
+              "ICE?-internalAppend-used-on-non-cons");
     Pair *p = unpackCons(r);
     if (!p) {
         return l;
     }
-    assert(getType(p->cdr) == LISPIS_CONS);
+    pushError(state, getType(p->cdr) == LISPIS_CONS,
+              "ICE?-right-hands-cdr-in-internalAppend-not-a-cons");
     return cons(state, p->car, internalAppend(state, p->cdr, l));
 }
 
@@ -414,12 +416,14 @@ void pushCActivationRecord(LispisState *state, uint64 numArgs) {
     state->currRecord = record;
 }
 
-Value runFunction(LispisState *state, Value funcObjValue,
-                  uint64 numArgs) {
-    assert(numArgs <= state->dataStackTop);
+void runFunctionInternal(LispisState *state, Value funcObjValue,
+                         uint64 numArgs) {
+    pushError(state, numArgs <= state->dataStackTop,
+              "fewer-values-in-data-"
+              "stack-then-arguments");
     LispisFunctionObject *funcObj = unpackLFunc(funcObjValue);
     pushActivationRecord(state, funcObj, true, numArgs);
-    push(state, nanPackInt32(numArgs));
+    pushInternal(state, nanPackInt32(numArgs));
     LispisFunction *func = 0;
  CALL:
     func = state->currRecord->function;
@@ -430,79 +434,80 @@ Value runFunction(LispisState *state, Value funcObjValue,
         state->currRecord->pc++;
         switch (op) {
             case OP_PUSH_GLOBAL: {
-                uint32 id = unpackSymbolID(pop(state));
+                uint32 id = unpackSymbolID(popInternal(state));
                 Value result = getGlobal(state, id);
-                push(state, result);
+                pushInternal(state, result);
             } break;
             case OP_PUSH_LOCAL: {
                 uint64 index = func->bytecode[state->currRecord->pc].ui64;
                 state->currRecord->pc++;
-                Value result = getLocal(state->currRecord->enviroment,
+                Value result = getLocal(state,
+                                        state->currRecord->enviroment,
                                         index);
-                push(state, result);
+                pushInternal(state, result);
             } break;
             case OP_PUSH_UPVAL: {
                 uint64 index = func->bytecode[state->currRecord->pc].ui64;
                 state->currRecord->pc++;
                 assert(index < state->currRecord->upvalsSize);
                 Upval upval = state->currRecord->upvals[index];
-                Value result = getUpval(upval);
-                push(state, result);
+                Value result = getUpval(state, upval);
+                pushInternal(state, result);
             } break;
             case OP_RETURN: {
-                Value ret = pop(state);
-                if (!state->currRecord->calledFromC) {
-                    popActivationRecord(state);
-                    push(state, ret);
+                Value ret = popInternal(state);
+                bool returnToC = state->currRecord->calledFromC;
+                popActivationRecord(state);
+                pushInternal(state, ret);
+                if (!returnToC) {
                     func = state->currRecord->function;
                 } else {
-                    popActivationRecord(state);
-                    return ret;
+                    return;
                 }
             } break;
             case OP_PUSH: {
                 Value p;
                 p = func->bytecode[state->currRecord->pc];
                 state->currRecord->pc++;
-                push(state, p);
+                pushInternal(state, p);
             } break;
             case OP_PUSH_NULL: {
-                push(state, emptyList());
+                pushInternal(state, emptyList());
             } break;
             case OP_LIST: {
-                int32 numElems = unpackInt(pop(state));
-                Value head = pop(state);
+                int32 numElems = unpackInt(popInternal(state));
+                Value head = popInternal(state);
                 assert(numElems > 0);
                 for (int32 i = 0; i < numElems-1; ++i) {
-                    head = cons(state, pop(state), head);
+                    head = cons(state, popInternal(state), head);
                 }
-                push(state, head);
+                pushInternal(state, head);
             } break;
             case OP_CALL: {
                 uint64 numArgs =
                     func->bytecode[state->currRecord->pc].ui64;
                 state->currRecord->pc++;
-                Value callee = pop(state);
+                Value callee = popInternal(state);
                 if (getType(callee) == LISPIS_CFUNC) {
                     pushCActivationRecord(state, numArgs);
                     CFunction *f = unpackCFunc(callee);
                     bool returned = f->func(state, numArgs);
                     Value retVal;
                     if (returned) {
-                        retVal = pop(state);
+                        retVal = popInternal(state);
                     } else {
                         retVal = nanPack(0, LISPIS_UNDEF);
                     }
                     popActivationRecord(state);
-                    push(state, retVal);
+                    pushInternal(state, retVal);
                 } else if (getType(callee) == LISPIS_LFUNC) {
                     LispisFunctionObject *lfuncObj = unpackLFunc(callee);
                     assert(!lfuncObj->function->macro);
                     pushActivationRecord(state, lfuncObj, false, numArgs);
-                    push(state, nanPackInt32(numArgs));
+                    pushInternal(state, nanPackInt32(numArgs));
                     goto CALL;
                 } else {
-                    assert(!"Can't call this type\n");
+                    pushError(state, false, "cant-call-this-type");
                 }
             } break;
             case OP_PUSH_LAMBDA_ID: {
@@ -511,31 +516,39 @@ Value runFunction(LispisState *state, Value funcObjValue,
                 LispisFunctionObject *funcObj =
                     allocFunctionObject(state, func->subFunctions[id],
                                         state->currRecord->enviroment);
-                push(state, nanPackPointer(funcObj,
+                pushInternal(state, nanPackPointer(funcObj,
                                            LISPIS_LFUNC));
             } break;
             case OP_POP_ASSERT_EQUAL: {
-                Value a = pop(state);
-                Value b = pop(state);
-                assert(a.ui64 == b.ui64);
+                int32 a = unpackInt(popInternal(state));
+                int32 b = unpackInt(popInternal(state));
+                pushError(state, a == b, "arrity-missmatch");
             } break;
             case OP_SET_LOCAL: {
                 uint32 index = func->bytecode[state->currRecord->pc].ui64;
                 state->currRecord->pc++;
-                Value v = pop(state);
-                setLocal(state->currRecord->enviroment,
+                Value v = popInternal(state);
+                setLocal(state, state->currRecord->enviroment,
                          v, index);
             } break;
+            case OP_SET_UPVAL: {
+                uint32 index = func->bytecode[state->currRecord->pc].ui64;
+                state->currRecord->pc++;
+                Value v = popInternal(state);
+                assert(index < state->currRecord->upvalsSize);
+                Upval upval = state->currRecord->upvals[index];
+                setUpval(state, v, upval);
+            } break;
             case OP_SET_GLOBAL: {
-                uint32 symId = unpackSymbolID(pop(state));
-                Value v = pop(state);
+                uint32 symId = unpackSymbolID(popInternal(state));
+                Value v = popInternal(state);
                 setGlobal(state, v, symId);
             } break;
             case OP_CLEAR_STACK: {
                 state->dataStackTop = state->currRecord->dataStackBottom;
             } break;
             case OP_JUMP_IF_TRUE: {
-                bool pred = unpackBoolean(pop(state));
+                bool pred = unpackBoolean(popInternal(state));
                 int64 target = func->bytecode[state->currRecord->pc].i64;
                 state->currRecord->pc++;
                 if (pred) {
@@ -558,24 +571,128 @@ Value runFunction(LispisState *state, Value funcObjValue,
                 
                 Value head = emptyList();
                 for (int32 i = 0; i < numVarargs; ++i) {
-                    head = cons(state, pop(state), head);
+                    head = cons(state, popInternal(state), head);
                 }
-                push(state, head);
+                pushInternal(state, head);
             } break;
             case OP_POP_ASSERT_LESS_OR_EQUAL: {
-                int32 smaller = unpackInt(pop(state));
-                int32 larger = unpackInt(pop(state));
-                assert(smaller <= larger);
+                int32 smaller = unpackInt(popInternal(state));
+                int32 larger = unpackInt(popInternal(state));
+
+                pushError(state, smaller < larger, "arrity-missmatch");
             } break;
             case OP_APPEND: {
-                int32 numElems = unpackInt(pop(state));
+                int32 numElems = unpackInt(popInternal(state));
                 assert(numElems > 0);
-                Value head = pop(state);
+                Value head = popInternal(state);
                 for (int32 i = 0; i < numElems-1; ++i) {
-                    head = internalAppend(state, pop(state),
+                    head = internalAppend(state, popInternal(state),
                                           head);
                 }
-                push(state, head);
+                pushInternal(state, head);
+            } break;
+            case OP_ALLOC_OBJECT: {
+                uint64 size = func->bytecode[state->currRecord->pc].ui64;
+                state->currRecord->pc++;
+                Object *obj = (Object *)callocGcObject(state,
+                                                     sizeof(Object));
+                obj->header.type = GC_OBJECT;
+                obj->size = size;
+                obj->elems = (KeyValPair *)calloc(size,
+                                                  sizeof(KeyValPair));
+                pushInternal(state, nanPackPointer(obj, LISPIS_OBJECT));
+            } break;
+            case OP_ALLOC_VECTOR: {
+                uint64 size = func->bytecode[state->currRecord->pc].ui64;
+                state->currRecord->pc++;
+                Vector *v = (Vector *)callocGcObject(state,
+                                                     sizeof(Vector));
+                v->header.type = GC_VECTOR;
+                v->size = size;
+                v->elems = (Value *)calloc(size, sizeof(Value));
+                pushInternal(state, nanPackPointer(v, LISPIS_VECTOR));
+            } break;
+            case OP_SET_ELEM: {
+                Value ref = popInternal(state);
+                Value value = popInternal(state);
+                Value obj = popInternal(state);
+                if (getType(obj) == LISPIS_VECTOR) {
+                    pushError(state, getType(ref) == LISPIS_INT32,
+                              "vectors-can-only-be-referenced-with-"
+                              "integers");
+                    Vector *vec = unpackVector(obj);
+                    writeBarrier(state, &vec->header);
+                    int32 index = unpackInt(ref);
+                    pushError(state, index >= 0 && index < vec->size,
+                              "index-out-of-bounds");
+                    vec->elems[index] = value;
+                    pushInternal(state, obj);
+                } else if (getType(obj) == LISPIS_OBJECT) {
+                    pushError(state, getType(ref) == LISPIS_SYM_IDX,
+                              "objects-can-only-be-referenced-with-"
+                              "integers");
+                    Object *object = unpackObject(obj);
+                    writeBarrier(state, &object->header);
+                    uint32 key = unpackSymbolID(ref);
+                    uint32 id = key % object->size;
+                    // HASH
+                    uint32 startID = id;
+                    while (object->elems[id].filled &&
+                           object->elems[id].key != key) {
+                        id++;
+                        id = id % object->size;
+                        pushError(state, id != startID,
+                                  "object-expansion-not-yet-implemented");
+                    }
+                    object->elems[id].val = value;
+                    object->elems[id].key = key;
+                    object->elems[id].filled = true;
+                    pushInternal(state, obj);
+                } else {
+                    pushError(state, false,
+                              "you-can-only-set-elements-of-vectors");
+                }
+            } break;
+            case OP_PUSH_ELEM: {
+                Value ref = popInternal(state);
+                Value obj = popInternal(state);
+                if (getType(obj) == LISPIS_VECTOR) {
+                    pushError(state, getType(ref) == LISPIS_INT32,
+                              "vectors-can-only-be-referenced-with-"
+                              "integers");
+                    Vector *vec = unpackVector(obj);
+                    int32 index = unpackInt(ref);
+                    pushError(state, index >= 0 && index < vec->size,
+                              "index-out-of-bounds");
+                    pushInternal(state, vec->elems[index]);
+                } else if (getType(obj) == LISPIS_OBJECT) {
+                    pushError(state, getType(ref) == LISPIS_SYM_IDX,
+                              "objects-can-only-be-referenced-with-"
+                              "integers");
+                    Object *object = unpackObject(obj);
+                    uint32 key = unpackSymbolID(ref);
+                    uint32 id = key % object->size;
+                    // HASH
+                    uint32 startID = id;
+                    bool found = true;
+                    while (!object->elems[id].filled ||
+                           object->elems[id].key != key) {
+                        id++;
+                        id = id % object->size;
+                        if (id == startID) {
+                            found = false;
+                            break;
+                        }
+                    }
+                    if (!found || !object->elems[id].filled) {
+                        pushInternal(state, nanPack(0, LISPIS_UNDEF));
+                    } else {
+                        pushInternal(state, object->elems[id].val);
+                    }
+                } else {
+                    pushError(state, false,
+                              "you-can-only-get-elements-of-vectors");
+                }
             } break;
             default:assert(false);
         }
@@ -636,6 +753,14 @@ void destroy(LispisState *state, GcObjectHeader *header) {
         case GC_LISPIS_FUNCTION_OBJECT: {
             LispisFunctionObject *lfo = (LispisFunctionObject *)header;
             free(lfo->upvals);
+        } break;
+        case GC_VECTOR: {
+            Vector *v = (Vector *)header;
+            free(v->elems);
+        } break;
+        case GC_OBJECT: {
+            Object *o = (Object *)header;
+            free(o->elems);
         } break;
         default:assert(false);
     }
@@ -734,6 +859,12 @@ void *callocGcObject(LispisState *state, uint64 size) {
 GcObjectHeader *headerFromValue(Value v) {
     GcObjectHeader *ret = 0;
     switch (getType(v)) {
+        case LISPIS_VECTOR: {
+            ret = (GcObjectHeader *)unpackVector(v);
+        } break;
+        case LISPIS_OBJECT: {
+            ret = (GcObjectHeader *)unpackObject(v);
+        } break;
         case LISPIS_CFUNC: {
             ret = (GcObjectHeader *)unpackCFunc(v);
         } break;
@@ -785,6 +916,20 @@ bool markStep(LispisState *state) {
         }
         obj->color |= GC_black;
         switch (obj->type) {
+            case GC_VECTOR: {
+                Vector *v = (Vector *)obj;
+                for (int i = 0; i < v->size; ++i) {
+                    markGray(state, headerFromValue(v->elems[i]));
+                }
+            } break;
+            case GC_OBJECT: {
+                Object *o = (Object *)obj;
+                for (int i = 0; i < o->size; ++i) {
+                    if (o->elems[i].filled) {
+                        markGray(state, headerFromValue(o->elems[i].val));
+                    }
+                }
+            } break;
             case GC_GLOBAL_ENV: {
                 GlobalEnv *e = (GlobalEnv *)obj;
                 for (uint32 i = 0, f = 0;
@@ -896,12 +1041,8 @@ bool sweepStep(LispisState *state) {
 }
 
 void markAndSweep(LispisState *state) {
-    uint32 numToProcess = state->numAllocated/2;
-    if (numToProcess < 8) {
-        numToProcess = 8;
-    }
     if (state->sweepPhase) {
-        for (uint32 i = 0; i < numToProcess; ++i) {
+        for (int i = 0; i < 200; ++i) {
             state->sweepPhase = sweepStep(state);
             if (!state->sweepPhase) {
                 //printf("sweep end\n");
@@ -910,8 +1051,7 @@ void markAndSweep(LispisState *state) {
             }
         }
     } else {
-        numToProcess /= 2;
-        for (uint32 i = 0; i < numToProcess; ++i) {
+        for (int i = 0; i < 200; ++i) {
             state->sweepPhase = !markStep(state);
             if (state->sweepPhase) {
                 //printf("mark end\n");
@@ -928,7 +1068,8 @@ void clearStack(LispisState *state) {
 }
 
 // Returns a LispisFunctionObject
-Value compileNullTerminatedString(LispisState *state, char *str) {
+bool compileNullTerminatedString(LispisState *state, char *str,
+                                 Value *ret) {
     LispisFunction *entry =
         (LispisFunction *)callocGcObject(state, sizeof(LispisFunction));
     entry->header.type = GC_LISPIS_FUNCTION;
@@ -939,24 +1080,38 @@ Value compileNullTerminatedString(LispisState *state, char *str) {
     Lexer lexer = {str};
     eatToken(&lexer);
 
-    CompilerPass compilerPasses[] = {
-        symbolIdPass,
-        // TODO: integrate quotePass into evalMacroPass and make it
-        // expand recursive macros correctly
-        evalMacroPass,
-        macroPass,
-        lambdaPass,
-        letPass,
-        definePass,
-        ifPass,
-        //variablePass
+    SymbolIdPass symbolIdPass;
+    MacroExpansionPass macroExpansionPass;
+    DefmacroPass defmacroPass;
+    LambdaPass lambdaPass;
+    LetPass letPass;
+    SetPass setPass;
+    DefinePass definePass;
+    IfPass ifPass;
+    ForPass forPass;
+    DoPass doPass;
+    RefPass refPass;
+    VariablePass variablePass;
+    LexicalScope entryScope = makeRealScope(0);
+    variablePass.currentScope = &entryScope;
+
+    CompilerPass *compilerPasses[] = {
+        &symbolIdPass,
+        &macroExpansionPass,
+        &defmacroPass,
+        &lambdaPass,
+        &letPass,
+        &setPass,
+        &definePass,
+        &ifPass,
+        &forPass,
+        &refPass,
+        &variablePass
     };
     pushOp(state, entry, OP_PUSH);
     pushInt32(state, entry, 0);
     pushOp(state, entry, OP_POP_ASSERT_EQUAL);
-    LexicalScope entryScope = {};
-    // Where we left of, WHO THE FUCK SHOULD SET LispisFunction's
-    // numLocals and upvalProtos
+    ActivationRecord *r = state->currRecord;
     while (peekToken(&lexer).tokenType != TOK_EOF) {
         Expr *parseTreeExpr = parseExpression(&lexer);
 #if LOG_ENABLED
@@ -967,22 +1122,33 @@ Value compileNullTerminatedString(LispisState *state, char *str) {
         Expr *next = 0;
         for (uint32 i = 0; i < arrayLength(compilerPasses);
              ++i) {
-            next = compilerPasses[i](state, prev);
+            // Might currently leak...
+            try {
+                next = compilerPasses[i]->startTransforming(state, prev);
+            } catch (int e) {
+                dealloc(prev);
+                state->currRecord = r;
+                return false;
+            }
             dealloc(prev);
             prev = next;
             next = 0;
         }
-        Expr *astDone = variablePass(state, prev, &entryScope);
-        dealloc(prev);
+        Expr *astDone = prev;;
 #if LOG_ENABLED
         printf("AST:\n");
         dumpTree(state, astDone, 0);
 #endif
-        compileExpression(state, entry, astDone);
+        try {
+            compileExpression(state, entry, astDone);
+        } catch (int e) {
+            state->currRecord = r;
+            return false;
+        }
         // hack
         entry->upvalProtos = 0;
         entry->upvalProtosSize = 0;
-        entry->numLocals = entryScope.variableIDsTop;
+        entry->numLocals = entryScope.real.totalVariablesSize;
         dealloc(astDone);
         //dealloc(parseTreeExpr);
         if (peekToken(&lexer).tokenType != TOK_EOF) {
@@ -1003,7 +1169,8 @@ Value compileNullTerminatedString(LispisState *state, char *str) {
 
     //TODO: should this really be frozen?
     freeze(state, &entryObj->header);
-    return nanPackPointer(entryObj, LISPIS_LFUNC);
+    *ret = nanPackPointer(entryObj, LISPIS_LFUNC);
+    return true;
 }
 
 void initState(LispisState *state) {
@@ -1032,13 +1199,32 @@ void initState(LispisState *state) {
     setupSpecialFormSymbols(state);
 }
 
-Value runNullTerminatedString(LispisState *state, char *str) {
-    Value entryObjVal = compileNullTerminatedString(state,
-                                                    str);
-    Value retVal = runFunction(state, entryObjVal, 0);
-    clearStack(state);
+bool runFunction(LispisState *state, Value funcObjValue, uint64 numArgs) {
+    ActivationRecord *r = state->currRecord;
+    try {
+        runFunctionInternal(state, funcObjValue, numArgs);
+    } catch (int e) {
+        state->currRecord = r;
+        return false;
+    }
+    return true;
+}
+
+bool runNullTerminatedString(LispisState *state, char *str) {
+    Value entryObjVal;
+    if (!compileNullTerminatedString(state, str, &entryObjVal)) {
+        return false;
+    }
+    ActivationRecord *r = state->currRecord;
+    try {
+        runFunctionInternal(state, entryObjVal, 0);
+    } catch (int e) {
+        unfreeze(state, &unpackLFunc(entryObjVal)->header);
+        state->currRecord = r;
+        return false;
+    }
     unfreeze(state, &unpackLFunc(entryObjVal)->header);
-    return retVal;
+    return true;
 }
 
 uint32 internCStr(LispisState *state, const char *cstr) {

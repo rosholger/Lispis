@@ -2,6 +2,7 @@
 #define VM_H
 #include "common.h"
 #include <cassert>
+#include <csetjmp>
 
 enum GcObjectType {
     GC_UNDEF, // ERROR to use
@@ -11,7 +12,9 @@ enum GcObjectType {
     GC_LISPIS_FUNCTION,
     GC_LISPIS_FUNCTION_OBJECT,
     GC_C_FUNCTION,
-    GC_PAIR
+    GC_PAIR,
+    GC_VECTOR,
+    GC_OBJECT,
 };
 
 enum GcColor {
@@ -133,17 +136,22 @@ struct Pair {
     Value cdr;
 };
 
-struct Nursery {
-    void *mem;
-    uint32 size;
-    uint32 top;
+struct Vector {
+    GcObjectHeader header;
+    int32 size;
+    Value *elems;
 };
 
-struct ForwardingList {
-    void **oldAddr;
-    void **newAddr;
-    uint32 size;
-    uint32 top;
+struct KeyValPair {
+    Value val;
+    uint32 key;
+    bool filled;
+};
+
+struct Object {
+    GcObjectHeader header;
+    int32 size;
+    KeyValPair *elems;
 };
 
 struct LispisState {
@@ -161,6 +169,7 @@ struct LispisState {
     bool currentWhite;
     bool sweepPhase;
     uint32 numAllocated;
+    jmp_buf currErrJmpTarget;
 };
 
 Value cons(LispisState *state, Value car, Value cdr);
@@ -195,58 +204,78 @@ ActivationRecord *allocActivationRecord(LispisState *state,
                                         bool topRecord);
 void bindFunction(LispisState *state, String symbol,
                   LispisCFunction func);
-Value runFunction(LispisState *state, Value funcObjValue, uint64 numArgs);
+// true = no error
+bool runFunction(LispisState *state, Value funcObjValue, uint64 numArgs);
+bool runNullTerminatedString(LispisState *state, char *str);
+bool compileNullTerminatedString(LispisState *state, char *str,
+                                  Value ret);
+
 void clearStack(LispisState *state);
 void markAndSweep(LispisState *state);
 void destroy(LispisState *state);
 //void setVariableRaw(LispisState *state, Env *env,
 //Value v, uint32 symbolID);
-Value compileNullTerminatedString(LispisState *state, char *str);
 void initState(LispisState *state);
-Value runNullTerminatedString(LispisState *state, char *str);
 Value lookupGlobal(LispisState *state, Value symbol);
 Value getGlobal(LispisState *state, uint32 globalSymbolID);
 void setGlobal(LispisState *state, Value v, uint32 symbolID);
 uint32 internCStr(LispisState *state, const char *cstr);
+void pushError(LispisState *state, bool onlyIfFalse, const char *str);
 
-#define assertStackInBounds(state, value)                               \
-    assert((value) >= (state)->currRecord->dataStackBottom)
+bool indexStack(LispisState *state, int64 i, Value *ret);
+bool pop(LispisState *state, Value *ret);
+bool peek(LispisState *state, Value *ret);
+bool push(LispisState *state, Value v);
+
+// Internal functions, do not use these
+
+#define assertStackInBounds(state, value, msg)                          \
+    pushError(state, (value) >= (state)->currRecord->dataStackBottom,  \
+              msg);
 
 inline
-Value indexStack(LispisState *state, int64 i) {
+Value indexStackInternal(LispisState *state, int64 i) {
     if (i >= 0) {
         assertStackInBounds(state,
-                            state->currRecord->dataStackBottom + i);
+                            state->currRecord->dataStackBottom + i,
+                            "i-is-out-of-bounds");
         return state->dataStack[state->currRecord->dataStackBottom+i];
     } else {
-        assertStackInBounds(state, state->dataStackTop - i);
+        assertStackInBounds(state, state->dataStackTop - i,
+                            "i-is-out-of-bounds");
         return state->dataStack[state->dataStackTop-i];
     }
 }
 
 inline
-Value peek(LispisState *state) {
-    assert(state->dataStackTop);
-    assertStackInBounds(state, state->dataStackTop - 1);
+Value peekInternal(LispisState *state) {
+    pushError(state, state->dataStackTop, "missing-values-in-data-stack");
+    assertStackInBounds(state, state->dataStackTop - 1,
+                        "missing-values-in-data-stack");
     return state->dataStack[state->dataStackTop-1];
 }
 
 inline
-Value pop(LispisState *state) {
-    assert(state->dataStackTop);
-    assertStackInBounds(state, state->dataStackTop - 1);
+Value popInternal(LispisState *state) {
+    pushError(state, state->dataStackTop, "missing-values-in-data-stack");
+    assertStackInBounds(state, state->dataStackTop - 1,
+                        "missing-values-in-data-stack");
     state->dataStackTop--;
     Value v = state->dataStack[state->dataStackTop];
     return v;
 }
 
 inline
-void push(LispisState *state, Value v) {
-    assertStackInBounds(state, state->dataStackTop);
+void pushInternal(LispisState *state, Value v) {
+    assertStackInBounds(state, state->dataStackTop,
+                        "data-stack-top < data-stack-bottom (weird)");
     state->dataStack[state->dataStackTop] = v;
     state->dataStackTop++;
 }
 
 #undef assertStackInBounds
+
+void runFunctionInternal(LispisState *state, Value funcObjValue,
+                         uint64 numArgs);
 
 #endif

@@ -41,6 +41,10 @@ enum OpCodes {
     OP_PUSH_NULL,
     OP_JUMP,
     OP_APPEND,
+    OP_ALLOC_OBJECT,
+    OP_ALLOC_VECTOR,
+    OP_SET_ELEM,
+    OP_PUSH_ELEM,
 };
 
 // TODO: switch all cases of bytecode from uint64 * to Bytecode *
@@ -90,6 +94,8 @@ enum NanPackingTypes {
     LISPIS_LFUNC,
     LISPIS_CONS,
     LISPIS_BOOLEAN,
+    LISPIS_VECTOR,
+    LISPIS_OBJECT,
 
 
 
@@ -161,6 +167,20 @@ CFunction *unpackCFunc(Value v) {
 inline
 LispisFunctionObject *unpackLFunc(Value v) {
     return (LispisFunctionObject *)unpackPointer(v, LISPIS_LFUNC);
+}
+
+struct Vector;
+
+inline
+Vector *unpackVector(Value v) {
+    return (Vector *)unpackPointer(v, LISPIS_VECTOR);
+}
+
+struct Object;
+
+inline
+Object *unpackObject(Value v) {
+    return (Object *)unpackPointer(v, LISPIS_OBJECT);
 }
 
 inline

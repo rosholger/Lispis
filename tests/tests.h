@@ -56,6 +56,8 @@ typedef int (*Test)();
     } while(0)
 #define TEST_TEARDOWN                           \
     destroy(&state)
-#define RUN_STR(res, str)                                       \
-    Value res = runNullTerminatedString(&state, (char *)str);
+#define RUN_STR(res, suc, str)                                  \
+    bool suc = runNullTerminatedString(&state, (char *)str);    \
+    Value res;                                                  \
+    suc = suc && pop(&state, &res);
 #endif

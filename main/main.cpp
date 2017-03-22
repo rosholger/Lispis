@@ -214,23 +214,48 @@ int main(int argsc, char **args) {
     initState(&state);
     initStdLib(&state);
     char *fileContent = readEntireFile((char *)"./test.lsp");
-    Value retVal = runNullTerminatedString(&state, fileContent);
-    printf("ret val:\n");
-    printValue(&state.globalSymbolTable,
-               retVal);
-    //freeze(&state, &unpackLFunc(retVal)->header);
-    Value ret;
-    for (int i = 0; i < 1000; ++i) {
-        push(&state, nanPackInt32(12));
-        ret = runFunction(&state, retVal, 1);
-        clearStack(&state);
-        printf("ret val:\n");
+    if (runNullTerminatedString(&state, fileContent)) {
+        Value retVal;
+        if (!pop(&state, &retVal)) {
+            Value err;
+            if (!pop(&state, &err)) {
+                printf("Failed to pop return value of test.lsp with"
+                       "error: ");
+                printValue(&state.globalSymbolTable, err);
+            }
+        }
         printValue(&state.globalSymbolTable,
-        ret);
-        markAndSweep(&state);
+                   retVal);
+        clearStack(&state);
+        Value ret;
+        for (int i = 0; i < 1000; ++i) {
+            push(&state, nanPackInt32(6));
+            if (!runFunction(&state, retVal, 1)) {
+                Value err;
+                pop(&state, &err);
+                printf("Failed to run retval. Error: ");
+                printValue(&state.globalSymbolTable, err);
+                break;
+            }
+            if (!pop(&state, &ret)) {
+                printf("Failed to pop return value of the"
+                       "return value of test.lsp with"
+                       "error: ");
+                Value err;
+                pop(&state, &err);
+                printValue(&state.globalSymbolTable, err);
+            }
+            clearStack(&state);
+            markAndSweep(&state);
+        }
+        printValue(&state.globalSymbolTable,
+                   ret);
+    } else {
+        printf("Failed to run test.lsp. Error: ");
+        Value err;
+        pop(&state, &err);
+        printValue(&state.globalSymbolTable, err);
     }
-    printValue(&state.globalSymbolTable,
-               ret);
     
     destroy(&state);
     free(fileContent);

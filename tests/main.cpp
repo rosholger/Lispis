@@ -5,6 +5,10 @@
 #include "quasiquote_tests.cpp"
 #include "lambda_tests.cpp"
 #include "macro_tests.cpp"
+#include "set_tests.cpp"
+#include "for_tests.cpp"
+#include "vector_tests.cpp"
+#include "object_tests.cpp"
 
 //TODO auto generate this file... PLEASE!!!
 int main(int argsc, char **args) {
@@ -27,6 +31,10 @@ int main(int argsc, char **args) {
         globalSymVar,
         localIntVar,
         localSymVar,
+        // set_tests
+        setLocalT,
+        setGlobalT,
+        setUpvalT,
         // quasiquote_tests
         unquoteIntVar,
         unquoteSymVar,
@@ -37,6 +45,8 @@ int main(int argsc, char **args) {
         quoteEqualQuasiquoteUnquote,
         quoteEqualQuasiquoteUnquoteSplice,
         quasiquoteDefine,
+        quasiquoteNestingBasic,
+        quasiquoteNestingUnquote,
         //lambda_tests
         lambdaIsLambda,
         lambdaReturnInt,
@@ -53,6 +63,25 @@ int main(int argsc, char **args) {
         defunTest,
         quotedMacro,
         multipleMacroLevels,
+        //for_tests
+        forBasic,
+        forExplicitVar,
+        forNestedVar,
+        forImpNestedVar,
+        forSameNestedVar,
+        //vector_tests
+        basicVectorTest,
+        basicVectorSet,
+        nestedVector,
+        nestedVectorSet,
+        //object_tests
+        basicObjectTest,
+        basicObjectSet,
+        nestedObject,
+        nestedObjectSet,
+        unquotedObjectKey,
+        unquotedObjectKeyInMacro,
+        wrongObjectKey,
     };
     int numSuccess = 0;
     for (uint64 i = 0; i < arrayLength(tests); ++i) {

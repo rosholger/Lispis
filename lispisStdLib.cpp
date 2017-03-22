@@ -7,7 +7,7 @@
 double lispisAddDouble(LispisState *state, uint64 argsLeft) {
     double ret = 0;
     for (uint64 i = 0; i < argsLeft; ++i) {
-        Value operand = pop(state);
+        Value operand = popInternal(state);
         if (getType(operand) == LISPIS_DOUBLE) {
             ret += operand.f64;
         } else {
@@ -22,10 +22,10 @@ bool lispisAdd(LispisState *state, uint64 numArgs) {
     int ret = 0;
     uint64 i;
     for (i = 0; i < numArgs; ++i) {
-        if (getType(peek(state)) != LISPIS_INT32) {
+        if (getType(peekInternal(state)) != LISPIS_INT32) {
             break;
         }
-        Value operand = pop(state);
+        Value operand = popInternal(state);
         ret += unpackInt(operand);
     }
     Value retValue;
@@ -35,20 +35,20 @@ bool lispisAdd(LispisState *state, uint64 numArgs) {
     } else {
         retValue = nanPackInt32(ret);
     }
-    push(state, retValue);
+    pushInternal(state, retValue);
     return true;
 }
 
 bool lispisToFloat(LispisState *state, uint64 numArgs) {
     Value ret;
     assert(numArgs == 1);
-    if (getType(peek(state))) {
-        ret.f64 = unpackInt(pop(state));
+    if (getType(peekInternal(state))) {
+        ret.f64 = unpackInt(popInternal(state));
     } else {
-        assert(getType(peek(state)) == LISPIS_DOUBLE);
-        ret = pop(state);
+        assert(getType(peekInternal(state)) == LISPIS_DOUBLE);
+        ret = popInternal(state);
     }
-    push(state, ret);
+    pushInternal(state, ret);
     return true;
 }
 
@@ -58,47 +58,47 @@ bool lispisSub(LispisState *state, uint64 numArgs) {
     retValue.f64 = 0;
 
     if (numArgs == 1) {
-        Value val = pop(state);
+        Value val = popInternal(state);
         retValue.f64 = (getType(val) == LISPIS_DOUBLE ?
                         -val.f64 :
                         nanPackInt32(-unpackInt(val)).f64);
     } else {
         bool allInt = true;
         for (uint64 i = 0; i < numArgs; ++i) {
-            if (getType(indexStack(state, i)) == LISPIS_DOUBLE) {
+            if (getType(indexStackInternal(state, i)) == LISPIS_DOUBLE) {
                 allInt = false;
                 break;
             } else {
-                assert(getType(indexStack(state, i)) == LISPIS_INT32);
+                assert(getType(indexStackInternal(state, i)) == LISPIS_INT32);
             }
         }
         if (allInt) {
             int pos = 0;
             int neg = 0;
             for (uint32 i = 1; i < numArgs; ++i) {
-                neg += unpackInt(pop(state));
+                neg += unpackInt(popInternal(state));
             }
-            pos = unpackInt(pop(state));
+            pos = unpackInt(popInternal(state));
             retValue = nanPackInt32(pos - neg);
         } else {
             double pos = 0;
             double neg = 0;
             for (uint32 i = 1; i < numArgs; ++i) {
-                if (getType(peek(state)) == LISPIS_INT32) {
-                    neg += unpackInt(pop(state));
+                if (getType(peekInternal(state)) == LISPIS_INT32) {
+                    neg += unpackInt(popInternal(state));
                 } else {
-                    neg += pop(state).f64;
+                    neg += popInternal(state).f64;
                 }
             }
-            if (getType(peek(state)) == LISPIS_INT32) {
-                pos = unpackInt(pop(state));
+            if (getType(peekInternal(state)) == LISPIS_INT32) {
+                pos = unpackInt(popInternal(state));
             } else {
-                pos = pop(state).f64;
+                pos = popInternal(state).f64;
             }
             retValue.f64 = pos - neg;
         }
     }
-    push(state, retValue);
+    pushInternal(state, retValue);
     return true;
 }
 
@@ -106,47 +106,47 @@ bool lispisMul(LispisState *state, uint64 numArgs) {
     assert(numArgs >= 1);
     bool allInt = true;
     for (uint64 i = 0; i < numArgs; ++i) {
-        if (getType(indexStack(state, i)) == LISPIS_DOUBLE) {
+        if (getType(indexStackInternal(state, i)) == LISPIS_DOUBLE) {
             allInt = false;
             break;
         } else {
-            assert(getType(indexStack(state, i)) == LISPIS_INT32);
+            assert(getType(indexStackInternal(state, i)) == LISPIS_INT32);
         }
     }
     if (allInt) {
         int ret = 1;
         for (uint32 i = 0; i < numArgs; ++i) {
-            ret *= unpackInt(pop(state));
+            ret *= unpackInt(popInternal(state));
         }
         Value retValue;
         retValue = nanPackInt32(ret);
-        push(state, retValue);
+        pushInternal(state, retValue);
     } else {
         double ret = 1;
         for (uint32 i = 0; i < numArgs; ++i) {
-            ret *= pop(state).f64;
+            ret *= popInternal(state).f64;
         }
         Value retValue;
         retValue.f64 = ret;
-        push(state, retValue);
+        pushInternal(state, retValue);
     }
     return true;
 }
 
 bool lispisIDiv(LispisState *state, uint64 numArgs) {
     assert(numArgs == 2);
-    int denominator = unpackInt(pop(state));
-    int nominator = unpackInt(pop(state));
+    int denominator = unpackInt(popInternal(state));
+    int nominator = unpackInt(popInternal(state));
     Value retValue;
     retValue = nanPackInt32(nominator/denominator);
-    push(state, retValue);
+    pushInternal(state, retValue);
     return true;
 }
 
 bool lispisDiv(LispisState *state, uint64 numArgs) {
     assert(numArgs == 2);
-    Value denominator = pop(state);
-    Value nominator = pop(state);
+    Value denominator = popInternal(state);
+    Value nominator = popInternal(state);
     Value retValue;
     if (getType(denominator) == LISPIS_INT32 &&
         getType(nominator) == LISPIS_INT32) {
@@ -177,14 +177,14 @@ bool lispisDiv(LispisState *state, uint64 numArgs) {
         }
         retValue.f64 = nom/denom;
     }
-    push(state, retValue);
+    pushInternal(state, retValue);
     return true;
 }
 
 bool lispisLess(LispisState *state, uint64 numArgs) {
     assert(numArgs == 2);
-    Value rh = pop(state);
-    Value lh = pop(state);
+    Value rh = popInternal(state);
+    Value lh = popInternal(state);
     bool ret = false;
     if (getType(rh) == LISPIS_DOUBLE && getType(lh) == LISPIS_DOUBLE) {
         ret = lh.f64 < rh.f64;
@@ -198,37 +198,60 @@ bool lispisLess(LispisState *state, uint64 numArgs) {
                getType(lh) == LISPIS_DOUBLE) {
         ret = lh.f64 < unpackInt(rh);
     } else {
-        assert(false && "Comparison only works on ints and doubles");
+        assert(false && "< only works on ints and doubles");
     }
-    push(state, nanPackBoolean(ret));
+    pushInternal(state, nanPackBoolean(ret));
+    return true;
+}
+
+bool lispisLessOrEqual(LispisState *state, uint64 numArgs) {
+    assert(numArgs == 2);
+    Value rh = popInternal(state);
+    Value lh = popInternal(state);
+    bool ret = false;
+    if (getType(rh) == LISPIS_DOUBLE && getType(lh) == LISPIS_DOUBLE) {
+        ret = lh.f64 <= rh.f64;
+    } else if (getType(rh) == LISPIS_INT32 &&
+               getType(lh) == LISPIS_INT32) {
+        ret = unpackInt(lh) <= unpackInt(rh);
+    } else if (getType(rh) == LISPIS_DOUBLE &&
+               getType(lh) == LISPIS_INT32) {
+        ret = unpackInt(lh) <= rh.f64;
+    } else if (getType(rh) == LISPIS_INT32 &&
+               getType(lh) == LISPIS_DOUBLE) {
+        ret = lh.f64 <= unpackInt(rh);
+    } else {
+        assert(false && "<= only works on ints and doubles");
+    }
+    pushInternal(state, nanPackBoolean(ret));
     return true;
 }
 
 bool lispisCar(LispisState *state, uint64 numArgs) {
     assert(numArgs == 1);
-    Pair *p = unpackCons(pop(state));
-    push(state, p->car);
+    Pair *p = unpackCons(popInternal(state));
+    pushInternal(state, p->car);
     return true;
 }
 
 bool lispisCdr(LispisState *state, uint64 numArgs) {
     assert(numArgs == 1);
-    Pair *p = unpackCons(pop(state));
-    push(state, p->cdr);
+    Pair *p = unpackCons(popInternal(state));
+    pushInternal(state, p->cdr);
     return true;
 }
 
 bool lispisIsNull(LispisState *state, uint64 numArgs) {
     assert(numArgs == 1);
-    push(state, nanPackBoolean(isNill(pop(state))));
+    pushInternal(state, nanPackBoolean(isNill(popInternal(state))));
     return true;
 }
 
 bool lispisCons(LispisState *state, uint64 numArgs) {
     assert(numArgs == 2);
-    Value cdr = pop(state);
-    Value car = pop(state);
-    push(state, cons(state, car, cdr));
+    Value cdr = popInternal(state);
+    Value car = popInternal(state);
+    pushInternal(state, cons(state, car, cdr));
     return true;
 }
 
@@ -268,6 +291,11 @@ void initStdLib(LispisState *state) {
     lessSymbol.length = 1;
     bindFunction(state, lessSymbol, lispisLess);
 
+    String lessOrEqualSymbol;
+    lessOrEqualSymbol.val = (char *)"<=";
+    lessOrEqualSymbol.length = 2;
+    bindFunction(state, lessOrEqualSymbol, lispisLessOrEqual);
+
     String carSymbol;
     carSymbol.val = (char *)"car";
     carSymbol.length = 3;
@@ -289,7 +317,7 @@ void initStdLib(LispisState *state) {
     bindFunction(state, isNullSymbol, lispisIsNull);
 
     String undef;
-    undef.val = (char *)"undefined";
+    undef.val = (char *)"*undefined*";
     undef.length = strlen(undef.val);
     uint32 undefID = internSymbol(state, undef, hashFunc(undef));
     setGlobal(state, nanPack(0, LISPIS_UNDEF), undefID);
@@ -297,15 +325,21 @@ void initStdLib(LispisState *state) {
     runNullTerminatedString(state,
                             (char *)
                             "(defmacro! defun! (name params . body)"
-                            "  (quasiquote (define! (unquote name)"
-                            "                (lambda (unquote params)"
-                            "                  (unquote-splice body)))))"
+                            "  `(define! ,name (lambda ,params ,@body)))"
                             ""
                             "(defmacro! letfun! (name params . body)"
-                            "  (quasiquote (let! (unquote name)"
-                            "                (lambda (unquote params)"
-                            "                  (unquote-splice body)))))"
+                            "  `(let! ,name (lambda ,params ,@body)))"
                             ""
                             "(defun! list lst lst)"
-                            "undefined");
+                            ""
+                            "(defmacro! : (obj ref)"
+                            "  (let! qref (list 'quasiquote ref))"
+                            "  `(ref ,obj ,qref))"
+                            ""
+                            "(defmacro! :! (obj ref val)"
+                            "  (let! qref (list 'quasiquote ref))"
+                            "  `(ref-set ,obj ,qref ,val))"
+                            ""
+                            "*undefined*"
+                            );
 }

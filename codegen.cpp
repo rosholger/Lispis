@@ -39,6 +39,12 @@ void pushUint64(LispisState *state, LispisFunction *func, uint64 u) {
     func->bytecodeTop++;
 }
 
+void pushInt64(LispisState *state, LispisFunction *func, int64 a) {
+    allocBytecode(state, func);
+    func->bytecode[func->bytecodeTop].i64 = a;
+    func->bytecodeTop++;
+}
+
 void pushDouble(LispisState *state, LispisFunction *func, double d) {
     allocBytecode(state, func);
     func->bytecode[func->bytecodeTop].f64 = d;
@@ -70,6 +76,41 @@ void compileQuotedExpr(LispisState *state, LispisFunction *func, Expr *expr) {
         case EXPR_SYMBOL_ID: {
             pushOp(state, func, OP_PUSH);
             pushSymbol(state, func, expr->symbolID);
+        } break;
+        case EXPR_VECTOR: {
+            printf("Compile quoted vector\n");
+            pushOp(state, func, OP_ALLOC_VECTOR);
+            pushUint64(state, func, expr->vec.numElems);
+            int currElem = 0;
+            for (ExprList *e = expr->vec.elems; e; e = e->next) {
+                compileQuotedExpr(state, func, e->val);
+                pushOp(state, func, OP_PUSH);
+                pushInt32(state, func, currElem);
+                pushOp(state, func, OP_SET_ELEM);
+                currElem++;
+            }
+            assert((uint32)currElem == expr->vec.numElems);
+        } break;
+        case EXPR_OBJECT: {
+            pushOp(state, func, OP_ALLOC_OBJECT);
+            pushUint64(state, func, expr->obj.numElems);
+            int currElem = 0;
+            for (ExprList *e = expr->obj.elems; e; e = e->next) {
+                compileQuotedExpr(state, func, e->val->keyValPair.val);
+                if (e->val->keyValPair.unquotedKey) {
+                    compileExpression(state, func,
+                                      e->val->keyValPair.key);
+                } else {
+                    assert(e->val->keyValPair.key->exprType ==
+                           EXPR_SYMBOL_ID);
+                    pushOp(state, func, OP_PUSH);
+                    pushSymbol(state, func,
+                               e->val->keyValPair.key->symbolID);
+                }
+                pushOp(state, func, OP_SET_ELEM);
+                currElem++;
+            }
+            assert((uint32)currElem == expr->obj.numElems);
         } break;
         default: {
             compileExpression(state, func, expr);
@@ -198,6 +239,12 @@ void compileLambdaBody(LispisState *state, LispisFunction *func,
     }
     pushOp(state, func, OP_RETURN);
     pushOp(state, func, OP_EXIT);
+}
+
+int64 calcRelativeJumpTo(LispisState *state, LispisFunction *func,
+                         uint64 jumpTo) {
+    assert((int64)jumpTo);
+    return (((int64)jumpTo)-1) - ((int64)func->bytecodeTop);
 }
 
 int64 calcRelativeJumpToTop(LispisState *state, LispisFunction *func, uint64 jumpFrom) {
@@ -346,9 +393,79 @@ void compileQuasiquote(LispisState *state, LispisFunction *func,
 #endif
 }
 
+uint64 getTarget(LispisState *state, LispisFunction *func) {
+    return func->bytecodeTop;
+}
+
 void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
     assert(expr);
     switch (expr->exprType) {
+        case EXPR_OBJECT: {
+            pushOp(state, func, OP_ALLOC_OBJECT);
+            pushUint64(state, func, expr->obj.numElems);
+            int currElem = 0;
+            for (ExprList *e = expr->obj.elems; e; e = e->next) {
+                compileExpression(state, func, e->val->keyValPair.val);
+                if (e->val->keyValPair.unquotedKey) {
+                    compileExpression(state, func,
+                                      e->val->keyValPair.key);
+                } else {
+                    assert(e->val->keyValPair.key->exprType ==
+                           EXPR_SYMBOL_ID);
+                    pushOp(state, func, OP_PUSH);
+                    pushSymbol(state, func,
+                               e->val->keyValPair.key->symbolID);
+                }
+                pushOp(state, func, OP_SET_ELEM);
+                currElem++;
+            }
+            assert((uint32)currElem == expr->obj.numElems);
+        } break;
+        case EXPR_VECTOR: {
+            pushOp(state, func, OP_ALLOC_VECTOR);
+            pushUint64(state, func, expr->vec.numElems);
+            int currElem = 0;
+            for (ExprList *e = expr->vec.elems; e; e = e->next) {
+                compileExpression(state, func, e->val);
+                pushOp(state, func, OP_PUSH);
+                pushInt32(state, func, currElem);
+                pushOp(state, func, OP_SET_ELEM);
+                currElem++;
+            }
+            assert((uint32)currElem == expr->vec.numElems);
+        } break;
+        case EXPR_FOR: {
+
+            compileExpression(state, func, expr->init);
+            pushOp(state, func, OP_SET_LOCAL);
+            pushUint64(state, func, expr->it->var.variableID);
+            uint64 loopCheckTarget = getTarget(state, func);
+            compileExpression(state, func, expr->pred);
+            pushOp(state, func, OP_JUMP_IF_TRUE);
+            uint64 loopCheckSuccededLoc = pushDummy(state, func);
+            pushOp(state, func, OP_JUMP);
+            uint64 loopCheckFailedLoc = pushDummy(state, func);
+            Value loopCheckSuccededRel;
+            loopCheckSuccededRel.i64 =
+                calcRelativeJumpToTop(state, func,
+                                      loopCheckSuccededLoc);
+            set(state, func, loopCheckSuccededRel, loopCheckSuccededLoc);
+            for (ExprList *b = expr->body; b; b = b->next) {
+                compileExpression(state, func, b->val);
+                pushOp(state, func, OP_CLEAR_STACK);
+            }
+            compileExpression(state, func, expr->upd);
+            pushOp(state, func, OP_JUMP);
+
+            pushInt64(state, func, calcRelativeJumpTo(state, func,
+                                                      loopCheckTarget));
+            Value loopCheckFailedRel;
+            loopCheckFailedRel.i64 =
+                calcRelativeJumpToTop(state, func,
+                                      loopCheckFailedLoc);
+            set(state, func, loopCheckFailedRel, loopCheckFailedLoc);
+
+        } break;
         case EXPR_QUOTE: {
             compileQuotedExpr(state, func, expr->quoted);
         } break;
@@ -454,6 +571,34 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
             // makes let! return the value, prob. pretty slow...
             compileExpression(state, func, expr->variable);
         } break;
+        case EXPR_SET: {
+            compileExpression(state, func, expr->value);
+            switch (expr->variable->var.kind) {
+                case VAR_GLOBAL: {
+                    pushOp(state, func, OP_PUSH);
+                    pushSymbol(state, func, expr->variable->var.symbolID);
+                    pushOp(state, func, OP_SET_GLOBAL);
+                } break;
+                case VAR_LOCAL: {
+                    pushOp(state, func, OP_SET_LOCAL);
+                    pushUint64(state, func,
+                               expr->variable->var.variableID);
+                } break;
+                case VAR_UPVAL: {
+                    pushOp(state, func, OP_SET_UPVAL);
+                    pushUint64(state,
+                               func, expr->variable->var.variableID);
+                    func->upvalProtos[expr->variable->var.variableID].depth =
+                        expr->variable->var.depth;
+                    func->upvalProtos[expr->variable->var.variableID].index =
+                        expr->variable->var.index;
+                } break;
+                default: assert(false);
+            }
+            //pushOp(state, func, OP_SET_LOCAL);
+            // makes let! return the value, prob. pretty slow...
+            compileExpression(state, func, expr->variable);
+        } break;
         case EXPR_LET: {
             compileExpression(state, func, expr->value);
             pushOp(state, func, OP_SET_LOCAL);
@@ -488,6 +633,22 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
         case EXPR_QUASIQUOTE: {
             compileQuasiquote(state, func,
                               expr->quasiquoteList, expr->dotted);
+        } break;
+        case EXPR_DO: {
+            for (ExprList *e = expr->list; e; e = e->next) {
+                compileExpression(state, func, e->val);
+            }
+        } break;
+        case EXPR_REF: {
+            compileExpression(state, func, expr->ref.obj);
+            compileExpression(state, func, expr->ref.ref);
+            pushOp(state, func, OP_PUSH_ELEM);
+        } break;
+        case EXPR_REF_SET: {
+            compileExpression(state, func, expr->refSet.obj);
+            compileExpression(state, func, expr->refSet.val);
+            compileExpression(state, func, expr->refSet.ref);
+            pushOp(state, func, OP_SET_ELEM);
         } break;
         default:assert(false);
     }

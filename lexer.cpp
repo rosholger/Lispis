@@ -46,7 +46,7 @@ bool startOfSymbol(char c) {
 
 bool isSymbolChar(char c) {
     return (c && !isSpaceOrComment(c) &&
-            c != '(' && c != ')' && c != '\'');
+            c != '(' && c != ')' && c != '\'' && c != ']');
 }
 
 Token lexSymbol(Lexer *lexer) {
@@ -80,6 +80,26 @@ Token lexToken(Lexer *lexer) {
     eatWhitespace(lexer);
     Token ret{};
     switch (*lexer->buf) {
+        case '[': {
+            lexer->buf++;
+            ret.tokenType = TOK_LSQUARE;
+            return ret;
+        } break;
+        case ']': {
+            lexer->buf++;
+            ret.tokenType = TOK_RSQUARE;
+            return ret;
+        } break;
+        case '{': {
+            lexer->buf++;
+            ret.tokenType = TOK_LBRACKET;
+            return ret;
+        } break;
+        case '}': {
+            lexer->buf++;
+            ret.tokenType = TOK_RBRACKET;
+            return ret;
+        } break;
         case '.': {
             lexer->buf++;
             ret.tokenType = TOK_DOT;
@@ -88,6 +108,20 @@ Token lexToken(Lexer *lexer) {
         case '\'': {
             lexer->buf++;
             ret.tokenType = TOK_QUOTE_ABR;
+            return ret;
+        } break;
+        case '`': {
+            lexer->buf++;
+            ret.tokenType = TOK_QUASIQUOTE_ABR;
+            return ret;
+        } break;
+        case ',': {
+            lexer->buf++;
+            ret.tokenType = TOK_UNQUOTE_ABR;
+            if ((*lexer->buf) == '@') {
+                lexer->buf++;
+                ret.tokenType = TOK_UNQUOTE_SPLICE_ABR;
+            }
             return ret;
         } break;
         case '(': {
