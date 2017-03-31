@@ -17,6 +17,9 @@ void eatComment(Lexer *lexer) {
 void eatWhitespace(Lexer *lexer) {
     eatComment(lexer);
     while(isspace(*lexer->buf)) {
+        if (*lexer->buf == '\n') {
+            lexer->currLine++;
+        }
         lexer->buf++;
         eatComment(lexer);
     }

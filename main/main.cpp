@@ -212,6 +212,19 @@ int main(int argsc, char **args) {
     assert(sizeof(Bytecode) == sizeof(uint64));
     LispisState state = {};
     initState(&state);
+    #if 0
+    char *patternsStr = readEntireFile((char *)"./parsePatterns.lsp");
+    Lexer lexer = {patternsStr};
+    eatToken(&lexer);
+    while (peekToken(&lexer).tokenType != TOK_EOF) {
+        Expr *parseTreeExpr = parseExpression(&lexer);
+        printf("ParseTree:\n");
+        dumpTree(&state, parseTreeExpr, 0);
+        dealloc(parseTreeExpr);
+    }
+    return 0;
+    #endif
+
     initStdLib(&state);
     char *fileContent = readEntireFile((char *)"./test.lsp");
     if (runNullTerminatedString(&state, fileContent)) {

@@ -27,10 +27,10 @@ Expr *parseKeyValPair(Lexer *lexer) {
 Expr *parseExpression(Lexer *lexer) {
     Expr *ret = (Expr *)calloc(1, sizeof(Expr));
     Token tok = eatToken(lexer);
+    ret->line = tok.line;
     switch(tok.tokenType) {
         case TOK_LBRACKET: {
             ret->exprType = EXPR_OBJECT;
-            ret->line = tok.line;
             ret->obj.elems = 0;
             if (peekToken(lexer).tokenType != TOK_RBRACKET) {
                 assert(peekToken(lexer).tokenType != TOK_EOF);
@@ -52,7 +52,6 @@ Expr *parseExpression(Lexer *lexer) {
         } break;
         case TOK_LSQUARE: {
             ret->exprType = EXPR_VECTOR;
-            ret->line = tok.line;
             ret->vec.elems = 0;
             ret->vec.numElems = 0;
             if (peekToken(lexer).tokenType != TOK_RSQUARE) {
@@ -63,7 +62,6 @@ Expr *parseExpression(Lexer *lexer) {
                 prev->val = parseExpression(lexer);
                 prev->next = 0;
                 while(peekToken(lexer).tokenType != TOK_RSQUARE) {
-                    printf("%d\n", peekToken(lexer).tokenType);
                     assert(peekToken(lexer).tokenType != TOK_EOF);
                     ret->vec.numElems++;
                     prev->next = (ExprList *)malloc(sizeof(ExprList));
@@ -112,12 +110,10 @@ Expr *parseExpression(Lexer *lexer) {
         } break;
         case TOK_SYMBOL: {
             ret->exprType = EXPR_SYMBOL;
-            ret->line = tok.line;
             ret->str = tok.str;
         } break;
         case TOK_INT: {
             ret->exprType = EXPR_INT;
-            ret->line = tok.line;
             ret->intVal = tok.intVal;
         } break;
         case TOK_LPAREN: {

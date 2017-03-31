@@ -105,46 +105,6 @@ void setUpval(LispisState *state, Value v, Upval upval) {
     setLocal(state, upval.env, v, upval.index);
 }
 
-void setGlobal(LispisState *state, Value v, uint32 symbolID) {
-    GlobalEnv *env = &state->globalEnviroment;
-    writeBarrier(state, &env->header);
-    if (env->variablesFilled > env->variablesSize*0.7) {
-        uint64 oldSize = env->variablesSize;
-        GlobalVar *oldVariables = env->variables;
-        env->variablesSize *= 1.5f;
-        env->variables = (GlobalVar *)calloc(env->variablesSize,
-                                             sizeof(GlobalVar));
-        for (uint64 i = 0; i < oldSize; ++i) {
-            if (oldVariables[i].filled) {
-                uint64 variableID = (oldVariables[i].symbolID %
-                                     env->variablesSize);
-                while (env->variables[variableID].filled) {
-                    variableID++;
-                    variableID = variableID % env->variablesSize;
-                }
-                env->variables[variableID] = oldVariables[i];
-            }
-        }
-        free(oldVariables);
-    }
-    uint32 variableID = symbolID % env->variablesSize;
-    while(env->variables[variableID].filled &&
-          env->variables[variableID].symbolID != symbolID) {
-        variableID++;
-        variableID = variableID % env->variablesSize;
-    }
-    //FIXME ugly hack
-    if (env->variables[variableID].filled) {
-        //decRef(state, env->variables[variableID].val);
-    } else {
-        env->variablesFilled++;
-    }
-    //incRef(state, v);
-    env->variables[variableID].symbolID = symbolID;
-    env->variables[variableID].filled = true;
-    env->variables[variableID].val = v;
-}
-
 #if 0
 void setVariableRaw(LispisState *state, Env *env,
                     Value v, uint32 symbolID) {
@@ -260,24 +220,6 @@ Value getLocal(LispisState *state, Env *env, uint32 index) {
 
 Value getUpval(LispisState *state, Upval upval) {
     return getLocal(state, upval.env, upval.index);
-}
-
-Value getGlobal(LispisState *state, uint32 globalSymbolID) {
-    GlobalEnv *env = &state->globalEnviroment;
-    uint32 variableID = globalSymbolID % env->variablesSize;
-    uint32 startID = variableID;
-    while (env->variables[variableID].symbolID != globalSymbolID &&
-           env->variables[variableID].filled) {
-        variableID++;
-        variableID = variableID % env->variablesSize;
-        if (variableID == startID) {
-            break;
-        }
-    }
-        pushError(state,
-                  env->variables[variableID].filled,
-                  "variable-undefined");
-    return env->variables[variableID].val;
 }
 
 String globalSymbolIdToSymbol(SymbolTable *globalSymbolTable,
@@ -418,10 +360,15 @@ void pushCActivationRecord(LispisState *state, uint64 numArgs) {
 
 uint32 protoSym;
 
+void extendObject(LispisState *state, Object *object);
+
 inline
 void setObjectElem(LispisState *state,
                    Object *object, uint32 key, Value value) {
     writeBarrier(state, &object->header);
+    if (object->numFilled * 1.5 > object->size) {
+        extendObject(state, object);
+    }
     if (key == protoSym) {
         pushError(state, getType(value) == LISPIS_OBJECT,
                   "object-*prototype*-has-to-be-an-object");
@@ -430,17 +377,36 @@ void setObjectElem(LispisState *state,
     }
     uint32 id = key % object->size;
     // HASH
-    uint32 startID = id;
+    uint32 perturb = key;
     while (object->elems[id].filled &&
            object->elems[id].key != key) {
-        id++;
+        id = (5*id)+1+perturb;
+        perturb >>= 5;
         id = id % object->size;
-        pushError(state, id != startID,
-                  "object-expansion-not-yet-implemented");
+    }
+    if (!object->elems[id].filled) {
+        object->numFilled++;
     }
     object->elems[id].val = value;
     object->elems[id].key = key;
     object->elems[id].filled = true;
+}
+
+
+void extendObject(LispisState *state, Object *object) {
+    Object tmp = *object;
+    object->size *= 2;
+    // TODO: scratch space
+    object->elems = (KeyValPair *)calloc(object->size,
+                                         sizeof(KeyValPair));
+    object->numFilled = 0;
+    writeBarrier(state, &object->header);
+    for (int i = 0, j = 0; i < tmp.size && j < tmp.numFilled; i++) {
+        if (tmp.elems[i].filled) {
+            setObjectElem(state, object,
+                          tmp.elems[i].key, tmp.elems[i].val);
+        }
+    }
 }
 
 // returns LISPIS_UNDEF if no value is found
@@ -455,10 +421,12 @@ Value getObjectElem(Object *object, uint32 key) {
     uint32 id = key % object->size;
     // HASH
     uint32 startID = id;
+    uint32 perturb = key;
     bool found = true;
     while (!object->elems[id].filled ||
            object->elems[id].key != key) {
-        id++;
+        id = (5*id)+1+perturb;
+        perturb >>= 5;
         id = id % object->size;
         if (id == startID) {
             found = false;
@@ -476,6 +444,146 @@ Value getObjectElem(Object *object, uint32 key) {
     }
 }
 
+// OPTIMIZE
+void extendVector(Vector *vector, int32 newNumberFilled) {
+    if (newNumberFilled > vector->size) {
+
+        int32 numberOfAddedElements = newNumberFilled - vector->size;
+        int32 numberOfAddedBuckets =
+            numberOfAddedElements/VECTOR_BUCKET_SIZE;
+        if (numberOfAddedElements % VECTOR_BUCKET_SIZE) {
+            numberOfAddedBuckets++;
+        }
+        if (!vector->size) {
+            vector->firstBucket =
+                (VectorBucket *)calloc(1, sizeof(VectorBucket));
+            vector->size += VECTOR_BUCKET_SIZE;
+            numberOfAddedBuckets--;
+        }
+        VectorBucket *lastBucket = vector->firstBucket;
+        while (lastBucket->next) {
+            lastBucket = lastBucket->next;
+        }
+        for (int i = 0; i < numberOfAddedBuckets; ++i) {
+            lastBucket->next =
+                (VectorBucket *)calloc(1, sizeof(VectorBucket));
+            lastBucket = lastBucket->next;
+        }
+        vector->size += numberOfAddedBuckets*VECTOR_BUCKET_SIZE;
+    }
+}
+
+Vector *allocVector(LispisState *state, int32 numToBeFilled) {
+    uint32 numBuckets = numToBeFilled/VECTOR_BUCKET_SIZE;
+    if (numToBeFilled % VECTOR_BUCKET_SIZE && numToBeFilled) {
+        numBuckets++;
+    }
+    uint32 size = numBuckets * VECTOR_BUCKET_SIZE;
+    Vector *v = (Vector *)callocGcObject(state,
+                                         sizeof(Vector));
+    v->header.type = GC_VECTOR;
+    v->size = size;
+    v->numFilled = 0;
+    v->firstBucket = 0;
+    if (numBuckets) {
+        v->firstBucket =
+            (VectorBucket *)calloc(1, sizeof(VectorBucket));
+        VectorBucket *prevBucket = v->firstBucket;
+        for (uint32 i = 1; i < numBuckets; ++i) {
+            prevBucket->next =
+                (VectorBucket *)calloc(1,
+                                       sizeof(VectorBucket));
+            prevBucket = prevBucket->next;
+        }
+    }
+    return v;
+}
+
+void setGlobal(LispisState *state, Value v, uint32 symbolID) {
+#if 0
+    GlobalEnv *env = &state->globalEnviroment;
+    writeBarrier(state, &env->header);
+    if (env->variablesFilled > env->variablesSize*0.7) {
+        uint64 oldSize = env->variablesSize;
+        GlobalVar *oldVariables = env->variables;
+        env->variablesSize *= 1.5f;
+        env->variables = (GlobalVar *)calloc(env->variablesSize,
+                                             sizeof(GlobalVar));
+        for (uint64 i = 0; i < oldSize; ++i) {
+            if (oldVariables[i].filled) {
+                uint64 variableID = (oldVariables[i].symbolID %
+                                     env->variablesSize);
+                while (env->variables[variableID].filled) {
+                    variableID++;
+                    variableID = variableID % env->variablesSize;
+                }
+                env->variables[variableID] = oldVariables[i];
+            }
+        }
+        free(oldVariables);
+    }
+    uint32 variableID = symbolID % env->variablesSize;
+    while(env->variables[variableID].filled &&
+          env->variables[variableID].symbolID != symbolID) {
+        variableID++;
+        variableID = variableID % env->variablesSize;
+    }
+    //FIXME ugly hack
+    if (env->variables[variableID].filled) {
+        //decRef(state, env->variables[variableID].val);
+    } else {
+        env->variablesFilled++;
+    }
+    //incRef(state, v);
+    env->variables[variableID].symbolID = symbolID;
+    env->variables[variableID].filled = true;
+    env->variables[variableID].val = v;
+    #endif
+    setObjectElem(state, &state->globalEnviroment, symbolID, v);
+}
+
+void appendVectorDestructive(LispisState *state,
+                             Vector *appendedTo,
+                             Vector *appended) {
+    writeBarrier(state, &appendedTo->header);
+    extendVector(appendedTo, appended->numFilled + appendedTo->numFilled);
+    assert(appendedTo->size >=
+           appended->numFilled + appendedTo->numFilled);
+    writeBarrier(state, &appendedTo->header); // gc might have happend
+    VectorBucket *toBucket = appendedTo->firstBucket;
+    for (int i = 0; i < appendedTo->numFilled/VECTOR_BUCKET_SIZE; ++i) {
+        toBucket = toBucket->next;
+    }
+    VectorBucket *fromBucket = appended->firstBucket;
+    for (int from = 0, to = appendedTo->numFilled;
+         from < appended->numFilled; ++from, ++to) {
+        int indexInToBucket = to % VECTOR_BUCKET_SIZE;
+        int indexInFromBucket = from % VECTOR_BUCKET_SIZE;
+        if (to && !indexInToBucket) {
+            toBucket = toBucket->next;
+            assert(toBucket);
+        }
+        if (from && !indexInFromBucket) {
+            fromBucket = fromBucket->next;
+            assert(fromBucket);
+        }
+        toBucket->elems[indexInToBucket] =
+            fromBucket->elems[indexInFromBucket];
+    }
+    appendedTo->numFilled += appended->numFilled;
+}
+                             
+#define NEXT_POW2(v)                            \
+    do {                                        \
+    v--;                                     \
+    v |= v >> 1;                          \
+    v |= v >> 2;                          \
+    v |= v >> 4;                          \
+    v |= v >> 8;                          \
+    v |= v >> 16;                         \
+    v++;                                     \
+    } while(0)
+
 void runFunctionInternal(LispisState *state, Value funcObjValue,
                          uint64 numArgs) {
     pushError(state, numArgs <= state->dataStackTop,
@@ -488,9 +596,10 @@ void runFunctionInternal(LispisState *state, Value funcObjValue,
  CALL:
     func = state->currRecord->function;
     while(func->bytecode[state->currRecord->pc].opCode != OP_EXIT) {
+        uint64 pc = state->currRecord->pc;
         assert(state->currRecord->pc < func->bytecodeSize);
         OpCodes op =
-            func->bytecode[state->currRecord->pc].opCode;
+            func->bytecode[pc].opCode;
         state->currRecord->pc++;
         switch (op) {
             case OP_PUSH_GLOBAL: {
@@ -639,7 +748,7 @@ void runFunctionInternal(LispisState *state, Value funcObjValue,
                 int32 smaller = unpackInt(popInternal(state));
                 int32 larger = unpackInt(popInternal(state));
 
-                pushError(state, smaller < larger, "arrity-missmatch");
+                pushError(state, smaller <= larger, "arrity-missmatch");
             } break;
             case OP_APPEND: {
                 int32 numElems = unpackInt(popInternal(state));
@@ -652,25 +761,35 @@ void runFunctionInternal(LispisState *state, Value funcObjValue,
                 pushInternal(state, head);
             } break;
             case OP_ALLOC_OBJECT: {
+                // CHANGE TO int32!!!!
                 uint64 size = func->bytecode[state->currRecord->pc].ui64;
                 state->currRecord->pc++;
                 Object *obj = (Object *)callocGcObject(state,
                                                      sizeof(Object));
+                obj->numFilled = 0;
                 obj->header.type = GC_OBJECT;
-                obj->size = size;
-                obj->elems = (KeyValPair *)calloc(size,
+                if (size < MIN_OBJECT_SIZE) {
+                    obj->size = MIN_OBJECT_SIZE;
+                } else {
+                    uint32 objSize = size;
+                    NEXT_POW2(objSize);
+                    if (objSize * 0.75 > size) {
+                        objSize *= 2;
+                    }
+                    obj->size = objSize;
+                }
+                obj->elems = (KeyValPair *)calloc(obj->size,
                                                   sizeof(KeyValPair));
                 pushInternal(state, nanPackPointer(obj, LISPIS_OBJECT));
             } break;
             case OP_ALLOC_VECTOR: {
-                uint64 size = func->bytecode[state->currRecord->pc].ui64;
+                uint64 numFilled =
+                    func->bytecode[state->currRecord->pc].ui64;
                 state->currRecord->pc++;
-                Vector *v = (Vector *)callocGcObject(state,
-                                                     sizeof(Vector));
-                v->header.type = GC_VECTOR;
-                v->size = size;
-                v->elems = (Value *)calloc(size, sizeof(Value));
-                pushInternal(state, nanPackPointer(v, LISPIS_VECTOR));
+                Vector *res = allocVector(state, numFilled);
+                res->numFilled = numFilled;
+                pushInternal(state,
+                             nanPackPointer(res, LISPIS_VECTOR));
             } break;
             case OP_SET_ELEM: {
                 Value ref = popInternal(state);
@@ -683,14 +802,20 @@ void runFunctionInternal(LispisState *state, Value funcObjValue,
                     Vector *vec = unpackVector(obj);
                     writeBarrier(state, &vec->header);
                     int32 index = unpackInt(ref);
-                    pushError(state, index >= 0 && index < vec->size,
+                    pushError(state, index >= 0 && index < vec->numFilled,
                               "index-out-of-bounds");
-                    vec->elems[index] = value;
+                    int32 indexInBucket = index % VECTOR_BUCKET_SIZE;
+                    int32 indexOfBucket = index / VECTOR_BUCKET_SIZE;
+                    VectorBucket *bucket = vec->firstBucket;
+                    for (int i = 0; i < indexOfBucket; ++i) {
+                        bucket = bucket->next;
+                    }
+                    bucket->elems[indexInBucket] = value;
                     pushInternal(state, obj);
                 } else if (getType(obj) == LISPIS_OBJECT) {
                     pushError(state, getType(ref) == LISPIS_SYM_IDX,
                               "objects-can-only-be-referenced-with-"
-                              "integers");
+                              "symbols");
                     Object *object = unpackObject(obj);
                     uint32 key = unpackSymbolID(ref);
                     setObjectElem(state, object, key, value);
@@ -709,9 +834,15 @@ void runFunctionInternal(LispisState *state, Value funcObjValue,
                               "integers");
                     Vector *vec = unpackVector(obj);
                     int32 index = unpackInt(ref);
-                    pushError(state, index >= 0 && index < vec->size,
+                    pushError(state, index >= 0 && index < vec->numFilled,
                               "index-out-of-bounds");
-                    pushInternal(state, vec->elems[index]);
+                    int32 indexInBucket = index % VECTOR_BUCKET_SIZE;
+                    int32 indexOfBucket = index / VECTOR_BUCKET_SIZE;
+                    VectorBucket *bucket = vec->firstBucket;
+                    for (int i = 0; i < indexOfBucket; ++i) {
+                        bucket = bucket->next;
+                    }
+                    pushInternal(state, bucket->elems[indexInBucket]);
                 } else if (getType(obj) == LISPIS_OBJECT) {
                     pushError(state, getType(ref) == LISPIS_SYM_IDX,
                               "objects-can-only-be-referenced-with-"
@@ -748,15 +879,31 @@ void bindFunction(LispisState *state,
     setGlobal(state, funcVal, symbolID);
 }
 
+Value getGlobal(LispisState *state, uint32 globalSymbolID) {
+#if 0
+    GlobalEnv *env = &state->globalEnviroment;
+    uint32 variableID = globalSymbolID % env->variablesSize;
+    uint32 startID = variableID;
+    while (env->variables[variableID].symbolID != globalSymbolID &&
+           env->variables[variableID].filled) {
+        variableID++;
+        variableID = variableID % env->variablesSize;
+        if (variableID == startID) {
+            break;
+        }
+    }
+        pushError(state,
+                  env->variables[variableID].filled,
+                  "variable-undefined");
+    return env->variables[variableID].val;
+#endif
+    return getObjectElem(&state->globalEnviroment, globalSymbolID);
+}
+
 void destroy(LispisState *state, GcObjectHeader *header) {
     state->numAllocated--;
     //printf("deallocating ");
     switch (header->type) {
-        case GC_GLOBAL_ENV: {
-            //printf("Env ");
-            GlobalEnv *e = (GlobalEnv *)header;
-            free(e->variables);
-        } break;
         case GC_ENV: {
             //printf("Env ");
             Env *e = (Env *)header;
@@ -786,7 +933,12 @@ void destroy(LispisState *state, GcObjectHeader *header) {
         } break;
         case GC_VECTOR: {
             Vector *v = (Vector *)header;
-            free(v->elems);
+            VectorBucket *bucket = v->firstBucket;
+            while(bucket) {
+                VectorBucket *next = bucket->next;
+                free(bucket);
+                bucket = next;
+            }
         } break;
         case GC_OBJECT: {
             Object *o = (Object *)header;
@@ -948,8 +1100,14 @@ bool markStep(LispisState *state) {
         switch (obj->type) {
             case GC_VECTOR: {
                 Vector *v = (Vector *)obj;
-                for (int i = 0; i < v->size; ++i) {
-                    markGray(state, headerFromValue(v->elems[i]));
+                VectorBucket *bucket = v->firstBucket;
+                for (int i = 0; i < v->numFilled; ++i) {
+                    int indexInBucket = i % VECTOR_BUCKET_SIZE;
+                    if (i && !indexInBucket) {
+                        bucket = bucket->next;
+                    }
+                    markGray(state,
+                             headerFromValue(bucket->elems[indexInBucket]));
                 }
             } break;
             case GC_OBJECT: {
@@ -957,18 +1115,6 @@ bool markStep(LispisState *state) {
                 for (int i = 0; i < o->size; ++i) {
                     if (o->elems[i].filled) {
                         markGray(state, headerFromValue(o->elems[i].val));
-                    }
-                }
-            } break;
-            case GC_GLOBAL_ENV: {
-                GlobalEnv *e = (GlobalEnv *)obj;
-                for (uint32 i = 0, f = 0;
-                     f < e->variablesFilled; ++i) {
-                    if (e->variables[i].filled) {
-                        f++;
-                        GcObjectHeader *v =
-                            headerFromValue(e->variables[i].val);
-                        markGray(state, v);
                     }
                 }
             } break;
@@ -1106,6 +1252,10 @@ bool compileNullTerminatedString(LispisState *state, char *str,
     entry->bytecodeSize = 256;
     entry->bytecode =
         (Bytecode *)calloc(1, entry->bytecodeSize * sizeof(Bytecode));
+    entry->instructionToLine =
+        (int32 *)malloc(entry->bytecodeSize * sizeof(int32));
+    memset(entry->instructionToLine, -1,
+           entry->bytecodeSize * sizeof(int32));
 
     Lexer lexer = {str};
     eatToken(&lexer);
@@ -1135,12 +1285,13 @@ bool compileNullTerminatedString(LispisState *state, char *str,
         &definePass,
         &ifPass,
         &forPass,
+        &doPass,
         &refPass,
         &variablePass
     };
-    pushOp(state, entry, OP_PUSH);
+    pushOp(state, entry, OP_PUSH, 0);
     pushInt32(state, entry, 0);
-    pushOp(state, entry, OP_POP_ASSERT_EQUAL);
+    pushOp(state, entry, OP_POP_ASSERT_EQUAL, 0);
     ActivationRecord *r = state->currRecord;
     while (peekToken(&lexer).tokenType != TOK_EOF) {
         Expr *parseTreeExpr = parseExpression(&lexer);
@@ -1182,10 +1333,10 @@ bool compileNullTerminatedString(LispisState *state, char *str,
         dealloc(astDone);
         //dealloc(parseTreeExpr);
         if (peekToken(&lexer).tokenType != TOK_EOF) {
-            pushOp(state, entry, OP_CLEAR_STACK);
+            pushOp(state, entry, OP_CLEAR_STACK, peekToken(&lexer).line);
         }
     }
-    pushOp(state, entry, OP_RETURN);
+    pushOp(state, entry, OP_RETURN, peekToken(&lexer).line);
 #if LOG_ENABLED
     dumpBytecode(state, entry);
 #endif
@@ -1206,15 +1357,15 @@ bool compileNullTerminatedString(LispisState *state, char *str,
 void initState(LispisState *state) {
     state->globalEnviroment.header.type = GC_GLOBAL_ENV;
     state->globalSymbolTable.symbolsSize = 256;
-    state->globalEnviroment.variablesSize = 256;
+    state->globalEnviroment.size = 256;
     state->globalSymbolTable.symbols =
         (Symbol *)calloc(1,
                          sizeof(Symbol) *
                          state->globalSymbolTable.symbolsSize +
                          sizeof(Var) *
-                         state->globalEnviroment.variablesSize);
-    state->globalEnviroment.variables =
-        (GlobalVar *)(state->globalSymbolTable.symbols +
+                         state->globalEnviroment.size);
+    state->globalEnviroment.elems =
+        (KeyValPair *)(state->globalSymbolTable.symbols +
                       state->globalSymbolTable.symbolsSize);
     state->dataStackSize = 2*1024;
     state->dataStack = (Value *)malloc(state->dataStackSize *

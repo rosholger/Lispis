@@ -18,11 +18,35 @@ Value exprToConsList(LispisState *state, Expr *expr) {
             Vector *v = (Vector *)callocGcObject(state,
                                                  sizeof(Vector));
             v->header.type = GC_VECTOR;
-            v->size = expr->vec.numElems;
-            v->elems = (Value *)calloc(v->size, sizeof(Value));
+            v->numFilled = expr->vec.numElems;
+            uint32 numBuckets = v->numFilled/VECTOR_BUCKET_SIZE;
+            if (v->numFilled % VECTOR_BUCKET_SIZE) {
+                numBuckets++;
+            }
+            uint32 size = numBuckets * VECTOR_BUCKET_SIZE;
+            v->size = size;
+            v->firstBucket = 0;
+            if (numBuckets) {
+                v->firstBucket =
+                    (VectorBucket *)calloc(1, sizeof(VectorBucket));
+                VectorBucket *prevBucket = v->firstBucket;
+                for (uint32 i = 1; i < numBuckets; ++i) {
+                    prevBucket->next =
+                        (VectorBucket *)calloc(1,
+                                               sizeof(VectorBucket));
+                    prevBucket = prevBucket->next;
+                }
+            }
             ExprList *e = expr->vec.elems;
-            for (int i = 0; i < v->size; ++i) {
-                v->elems[i] = exprToConsList(state, e->val);
+            // -1 hack to simplify loop
+            VectorBucket *bucket = v->firstBucket;
+            for (int i = 0; i < v->numFilled; ++i) {
+                int32 indexInBucket = i % VECTOR_BUCKET_SIZE;
+                if (i && !indexInBucket) {
+                    bucket = bucket->next;
+                }
+                bucket->elems[indexInBucket] =
+                    exprToConsList(state, e->val);
                 e = e->next;
             }
             ret = nanPackPointer(v, LISPIS_VECTOR);
@@ -136,6 +160,10 @@ Expr *consListToExpr(LispisState *state, Value consList, int line) {
     Expr *ret = (Expr *)calloc(1, sizeof(Expr));
     ret->line = line;
     switch (getType(consList)) {
+        case LISPIS_BOOLEAN: {
+            ret->exprType = EXPR_BOOLEAN;
+            ret->boolean = unpackBoolean(consList);
+        } break;
         case LISPIS_OBJECT: {
             ret->exprType = EXPR_OBJECT;
             Object *o = unpackObject(consList);
@@ -171,22 +199,28 @@ Expr *consListToExpr(LispisState *state, Value consList, int line) {
         case LISPIS_VECTOR: {
             ret->exprType = EXPR_VECTOR;
             Vector *v = unpackVector(consList);
-            ret->vec.numElems = v->size;
+            ret->vec.numElems = v->numFilled;
             ret->vec.elems = 0;
-            if (v->size) {
+            if (v->numFilled) {
                 ret->vec.elems = (ExprList *)malloc(sizeof(ExprList));
-                ret->vec.elems->val = consListToExpr(state,
-                                                     v->elems[0],
-                                                     line);
+                ret->vec.elems->val =
+                    consListToExpr(state, v->firstBucket->elems[0],
+                                   line);
                 ret->vec.elems->next = 0;
                 ExprList *prev = ret->vec.elems;
-                for (int i = 1; i < v->size; ++i) {
+                VectorBucket *bucket = v->firstBucket;
+                for (int i = 1; i < v->numFilled; ++i) {
+                    int32 indexInBucket = i % VECTOR_BUCKET_SIZE;
+                    if (i && !indexInBucket) {
+                        bucket = bucket->next;
+                    }
                     prev->next = (ExprList *)malloc(sizeof(ExprList));
                     prev = prev->next;
                     prev->next = 0;
-                    prev->val = consListToExpr(state,
-                                               v->elems[i],
-                                               line);
+                    prev->val =
+                        consListToExpr(state,
+                                       bucket->elems[indexInBucket],
+                                       line);
                 }
             }
         } break;
@@ -220,6 +254,9 @@ void dumpTree(LispisState *state, Expr *node, int identLevel) {
     }
     if (node) {
         switch(node->exprType) {
+            case EXPR_BOOLEAN: {
+                printf("%s\n", node->boolean ? "TRUE" : "FALSE");
+            } break;
             case EXPR_VECTOR: {
                 printf("[\n");
                 for (ExprList *e = node->vec.elems; e; e = e->next) {
@@ -593,6 +630,11 @@ void dumpBytecode(LispisState *state, LispisFunction *func) {
                         printf("symbol index: %u\n",
                                unpackSymbolID(func->bytecode[pc]));
                     } break;
+                    case LISPIS_BOOLEAN: {
+                        printf("%s\n",
+                               unpackBoolean(func->bytecode[pc]) ?
+                               "TRUE" : "FALSE");
+                    } break;
                     default:assert(false);
                 }
             } break;
@@ -688,6 +730,7 @@ void dealloc(Expr *expr) {
             } break;
             case EXPR_DOUBLE:
             case EXPR_STRING: // FIX
+            case EXPR_BOOLEAN:
             case EXPR_SYMBOL_ID:
             case EXPR_INT:
             case EXPR_VARIABLE:
@@ -826,9 +869,15 @@ void printValueRec(SymbolTable *globalSymbolTable,
         case LISPIS_VECTOR: {
             Vector *vec = unpackVector(v);
             printf("[");
-            for (int i = 0; i < vec->size; ++i) {
-                printValueRec(globalSymbolTable, vec->elems[i]);
-                if (i+1 < vec->size) {
+            VectorBucket *bucket = vec->firstBucket;
+            for (int i = 0; i < vec->numFilled; ++i) {
+                int indexInBucket = i % VECTOR_BUCKET_SIZE;
+                if (i && !indexInBucket) {
+                    bucket = bucket->next;
+                }
+                printValueRec(globalSymbolTable,
+                              bucket->elems[indexInBucket]);
+                if (i+1 < vec->numFilled) {
                     printf(" ");
                 }
             }

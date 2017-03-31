@@ -1,6 +1,16 @@
 #ifndef COMPILER_PASSES_H
 #define COMPILER_PASSES_H
 #include "common.h"
+
+// TODO: change for from C-style to python-style
+// ie instead of (for (init pred upd) . body)
+// we want to have (for var iter . body)
+// where iter is a zero arity function that when called returns
+// the "next" value and *undefined* means finished
+
+// This also fixes that implicit variable cant be initialized with
+// functions, HUGE gotcha
+
 struct Expr;
 struct LispisState;
 

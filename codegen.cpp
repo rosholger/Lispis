@@ -7,17 +7,25 @@
 #include <cstring>
 
 void allocBytecode(LispisState *state, LispisFunction *func) {
+    uint64 prevBytecodeSize = func->bytecodeSize;
     if (func->bytecodeTop == func->bytecodeSize) {
         func->bytecodeSize = func->bytecodeSize * 1.5f;
         func->bytecode = (Bytecode *)realloc(func->bytecode,
                                              sizeof(Bytecode) *
                                              func->bytecodeSize);
+        func->instructionToLine =
+            (int32 *)realloc(func->instructionToLine,
+                             sizeof(int32) * func->bytecodeSize);
+        memset(func->instructionToLine + prevBytecodeSize,
+               -1, func->bytecodeSize-prevBytecodeSize);
     }
 }
 
-void pushOp(LispisState *state, LispisFunction *func, OpCodes op) {
+void pushOp(LispisState *state, LispisFunction *func,
+            OpCodes op, int32 line) {
     allocBytecode(state, func);
     func->bytecode[func->bytecodeTop] = nanPack(op, LISPIS_OP);
+    func->instructionToLine[func->bytecodeTop] = line;
     func->bytecodeTop++;
 }
 
@@ -65,34 +73,39 @@ void pushSymbol(LispisState *state, LispisFunction *func, uint32 str) {
     pushDouble(state, func, nanPackSymbolIdx(symbolIdx).f64);
 }
 
+void pushBoolean(LispisState *state, LispisFunction *func, bool boolean) {
+    pushDouble(state, func, nanPackBoolean(boolean).f64);
+}
+
 void compileQuotedList(LispisState *state, LispisFunction *func,
-                       ExprList *exprList, bool dotted);
+                       ExprList *exprList, bool dotted, int32 line);
 
 void compileQuotedExpr(LispisState *state, LispisFunction *func, Expr *expr) {
     switch (expr->exprType) {
         case EXPR_LIST: {
-            compileQuotedList(state, func, expr->list, expr->dotted);
+            compileQuotedList(state, func, expr->list,
+                              expr->dotted, expr->line);
         } break;
         case EXPR_SYMBOL_ID: {
-            pushOp(state, func, OP_PUSH);
+            pushOp(state, func, OP_PUSH, expr->line);
             pushSymbol(state, func, expr->symbolID);
         } break;
         case EXPR_VECTOR: {
             printf("Compile quoted vector\n");
-            pushOp(state, func, OP_ALLOC_VECTOR);
+            pushOp(state, func, OP_ALLOC_VECTOR, expr->line);
             pushUint64(state, func, expr->vec.numElems);
             int currElem = 0;
             for (ExprList *e = expr->vec.elems; e; e = e->next) {
                 compileQuotedExpr(state, func, e->val);
-                pushOp(state, func, OP_PUSH);
+                pushOp(state, func, OP_PUSH, e->val->line);
                 pushInt32(state, func, currElem);
-                pushOp(state, func, OP_SET_ELEM);
+                pushOp(state, func, OP_SET_ELEM, e->val->line);
                 currElem++;
             }
             assert((uint32)currElem == expr->vec.numElems);
         } break;
         case EXPR_OBJECT: {
-            pushOp(state, func, OP_ALLOC_OBJECT);
+            pushOp(state, func, OP_ALLOC_OBJECT, expr->line);
             pushUint64(state, func, expr->obj.numElems);
             int currElem = 0;
             for (ExprList *e = expr->obj.elems; e; e = e->next) {
@@ -103,11 +116,13 @@ void compileQuotedExpr(LispisState *state, LispisFunction *func, Expr *expr) {
                 } else {
                     assert(e->val->keyValPair.key->exprType ==
                            EXPR_SYMBOL_ID);
-                    pushOp(state, func, OP_PUSH);
+                    pushOp(state, func, OP_PUSH,
+                           e->val->keyValPair.key->line);
                     pushSymbol(state, func,
                                e->val->keyValPair.key->symbolID);
                 }
-                pushOp(state, func, OP_SET_ELEM);
+                pushOp(state, func, OP_SET_ELEM,
+                       e->val->keyValPair.key->line);
                 currElem++;
             }
             assert((uint32)currElem == expr->obj.numElems);
@@ -119,19 +134,19 @@ void compileQuotedExpr(LispisState *state, LispisFunction *func, Expr *expr) {
 }
 
 void compileQuotedList(LispisState *state, LispisFunction *func,
-                       ExprList *exprList, bool dotted) {
+                       ExprList *exprList, bool dotted, int32 line) {
     int32 numElems = 0;
     for (ExprList *head = exprList; head; head = head->next) {
         numElems++;
         compileQuotedExpr(state, func, head->val);
     }
     if (!dotted) {
-        pushOp(state, func, OP_PUSH_NULL);
+        pushOp(state, func, OP_PUSH_NULL, line);
         numElems++;
     }
-    pushOp(state, func, OP_PUSH);
+    pushOp(state, func, OP_PUSH, line);
     pushInt32(state, func, numElems);
-    pushOp(state, func, OP_LIST);
+    pushOp(state, func, OP_LIST, line);
 }
 
 LispisFunction *startNewLambda(LispisState *state, LispisFunction *func) {
@@ -150,6 +165,9 @@ LispisFunction *startNewLambda(LispisState *state, LispisFunction *func) {
     ret->bytecodeSize = 16;
     ret->bytecode =
         (Bytecode *)calloc(1, ret->bytecodeSize * sizeof(Bytecode));
+    ret->instructionToLine =
+        (int32 *)malloc(ret->bytecodeSize * sizeof(int32));
+    memset(ret->instructionToLine, -1, ret->bytecodeSize * sizeof(int32));
     func->subFunctions[func->subFunctionsLength-1] = ret;
     return ret;
 }
@@ -170,6 +188,9 @@ LispisFunction *startNewMacro(LispisState *state) {
     ret->bytecodeSize = 16;
     ret->bytecode =
         (Bytecode *)calloc(1, ret->bytecodeSize * sizeof(Bytecode));
+    ret->instructionToLine =
+        (int32 *)malloc(ret->bytecodeSize * sizeof(int32));
+    memset(ret->instructionToLine, -1, ret->bytecodeSize * sizeof(int32));
     ret->macro = true;
     //func->subFunctions[func->subFunctionsLength-1] = ret;
     return ret;
@@ -183,45 +204,50 @@ void compileLambdaParamsRec(LispisState *state, LispisFunction *func,
         compileLambdaParamsRec(state, func, params->next, varargs,
                                numFormal);
     } else if (varargs && params->next) {
-        pushOp(state, func, OP_COLLECT_VARARGS);
+        pushOp(state, func, OP_COLLECT_VARARGS,
+               params->next->val->line);
         pushInt32(state, func, numFormal);
         assert(params->next->val->exprType == EXPR_VARIABLE);
-        pushOp(state, func, OP_SET_LOCAL);
+        pushOp(state, func, OP_SET_LOCAL,
+               params->next->val->line);
         pushUint64(state, func, params->next->val->var.variableID);
     }
     assert(params->val->exprType == EXPR_VARIABLE);
-    pushOp(state, func, OP_SET_LOCAL);
+    pushOp(state, func, OP_SET_LOCAL,
+               params->val->line);
     pushUint64(state, func, params->val->var.variableID);
 }
 
 void compileLambdaParams(LispisState *state, LispisFunction *func,
                          ExprList *params, int32 paramsCount,
-                         bool varargs) {
+                         bool varargs, int32 line) {
     if (varargs) {
         if (params) {
             if (params->next) {
-                pushOp(state, func, OP_PUSH);
+                pushOp(state, func, OP_PUSH, line);
                 pushInt32(state, func, paramsCount-1); // last is rest
-                pushOp(state, func, OP_POP_ASSERT_LESS_OR_EQUAL);
+                pushOp(state, func, OP_POP_ASSERT_LESS_OR_EQUAL, line);
                 if (params) {
                     compileLambdaParamsRec(state, func, params,
                                            varargs, paramsCount-1);
                 }
             } else {
-                pushOp(state, func, OP_PUSH);
+                pushOp(state, func, OP_PUSH, params->val->line);
                 pushInt32(state, func, 0); // last is rest
-                pushOp(state, func, OP_POP_ASSERT_LESS_OR_EQUAL);
-                pushOp(state, func, OP_COLLECT_VARARGS);
+                pushOp(state, func, OP_POP_ASSERT_LESS_OR_EQUAL,
+                       params->val->line);
+                pushOp(state, func, OP_COLLECT_VARARGS,
+                       params->val->line);
                 pushInt32(state, func, 0);
                 assert(params->val->exprType == EXPR_VARIABLE);
-                pushOp(state, func, OP_SET_LOCAL);
+                pushOp(state, func, OP_SET_LOCAL, params->val->line);
                 pushUint64(state, func, params->val->var.variableID);
             }
         }
     } else {
-        pushOp(state, func, OP_PUSH);
+        pushOp(state, func, OP_PUSH, line);
         pushInt32(state, func, paramsCount);
-        pushOp(state, func, OP_POP_ASSERT_EQUAL);
+        pushOp(state, func, OP_POP_ASSERT_EQUAL, line);
         if (params) {
             compileLambdaParamsRec(state, func, params,
                                    varargs, paramsCount);
@@ -231,14 +257,16 @@ void compileLambdaParams(LispisState *state, LispisFunction *func,
 
 void compileLambdaBody(LispisState *state, LispisFunction *func,
                        ExprList *body) {
+    int32 lastLine = -1;
     for (ExprList *exprElem = body; exprElem; exprElem = exprElem->next) {
         compileExpression(state, func, exprElem->val);
         if (exprElem->next) {
-            pushOp(state, func, OP_CLEAR_STACK);
+            pushOp(state, func, OP_CLEAR_STACK, exprElem->val->line);
+            lastLine = exprElem->val->line;
         }
     }
-    pushOp(state, func, OP_RETURN);
-    pushOp(state, func, OP_EXIT);
+    pushOp(state, func, OP_RETURN, lastLine);
+    pushOp(state, func, OP_EXIT, lastLine);
 }
 
 int64 calcRelativeJumpTo(LispisState *state, LispisFunction *func,
@@ -254,17 +282,18 @@ int64 calcRelativeJumpToTop(LispisState *state, LispisFunction *func, uint64 jum
 }
 
 void compileQuasiquote(LispisState *state, LispisFunction *func,
-                       QuasiquoteList *exprList, bool dotted);
+                       QuasiquoteList *exprList, bool dotted, int32 line);
 
-void compileQuasiquotedExpr(LispisState *state, LispisFunction *func, Expr *expr) {
+void compileQuasiquotedExpr(LispisState *state, LispisFunction *func,
+                            Expr *expr, int32 line) {
     if (expr) {
         switch (expr->exprType) {
             case EXPR_QUASIQUOTE: {
                 compileQuasiquote(state, func, expr->quasiquoteList,
-                                  expr->dotted);
+                                  expr->dotted, expr->line);
             } break;
             case EXPR_SYMBOL_ID: {
-                pushOp(state, func, OP_PUSH);
+                pushOp(state, func, OP_PUSH, expr->line);
                 pushSymbol(state, func, expr->symbolID);
             } break;
             default: {
@@ -272,14 +301,14 @@ void compileQuasiquotedExpr(LispisState *state, LispisFunction *func, Expr *expr
             } break;
         }
     } else {
-        pushOp(state, func, OP_PUSH_NULL);
+        pushOp(state, func, OP_PUSH_NULL, line);
     }
 }
 
 void compileQuasiquote(LispisState *state, LispisFunction *func,
-                       QuasiquoteList *lst, bool dotted) {
+                       QuasiquoteList *lst, bool dotted, int32 line) {
     if (!lst->next && !lst->val) {
-        pushOp(state, func, OP_PUSH_NULL);
+        pushOp(state, func, OP_PUSH_NULL, line);
         return;
     }
     int32 tmpElems = 0;
@@ -290,25 +319,25 @@ void compileQuasiquote(LispisState *state, LispisFunction *func,
             prevUnquoted = true;
             numElems++;
             if (tmpElems) {
-                pushOp(state, func, OP_PUSH_NULL);
-                pushOp(state, func, OP_PUSH);
+                pushOp(state, func, OP_PUSH_NULL, head->val->line);
+                pushOp(state, func, OP_PUSH, head->val->line);
                 pushInt32(state, func, tmpElems+1);
-                pushOp(state, func, OP_LIST);
+                pushOp(state, func, OP_LIST, head->val->line);
                 tmpElems = 0;
             }
             compileExpression(state, func, head->val);
-            pushOp(state, func, OP_PUSH_NULL);
-            pushOp(state, func, OP_PUSH);
+            pushOp(state, func, OP_PUSH_NULL, head->val->line);
+            pushOp(state, func, OP_PUSH, head->val->line);
             pushInt32(state, func, 2);
-            pushOp(state, func, OP_LIST);
+            pushOp(state, func, OP_LIST, head->val->line);
         } else if (head->unquoteSpliced) {
             prevUnquoted = true;
             numElems++;
             if (tmpElems) {
-                pushOp(state, func, OP_PUSH_NULL);
-                pushOp(state, func, OP_PUSH);
+                pushOp(state, func, OP_PUSH_NULL, head->val->line);
+                pushOp(state, func, OP_PUSH, head->val->line);
                 pushInt32(state, func, tmpElems+1);
-                pushOp(state, func, OP_LIST);
+                pushOp(state, func, OP_LIST, head->val->line);
                 tmpElems = 0;
             }
             compileExpression(state, func, head->val);
@@ -318,79 +347,21 @@ void compileQuasiquote(LispisState *state, LispisFunction *func,
                 prevUnquoted = false;
             }
             tmpElems++;
-            compileQuasiquotedExpr(state, func, head->val);
+            compileQuasiquotedExpr(state, func, head->val, line);
         }
     }
     if (tmpElems) {
         if (!dotted) {
-            pushOp(state, func, OP_PUSH_NULL);
+            pushOp(state, func, OP_PUSH_NULL, line);
             tmpElems++;
         }
-        pushOp(state, func, OP_PUSH);
+        pushOp(state, func, OP_PUSH, line);
         pushInt32(state, func, tmpElems);
-        pushOp(state, func, OP_LIST);
+        pushOp(state, func, OP_LIST, line);
     }
-    pushOp(state, func, OP_PUSH);
+    pushOp(state, func, OP_PUSH, line);
     pushInt32(state, func, numElems);
-    pushOp(state, func, OP_APPEND);
-#if 0
-    int32 tmpElems = 0;
-    int32 numElems = 0;
-    //if (lst) {
-    //numElems++;
-    //}
-    QuasiquoteList *last = lst;
-    for (QuasiquoteList *head = lst; head; head = head->next) {
-        last = head;
-        if (head->unquoted) {
-            numElems++;
-            if (tmpElems) {
-                numElems++;
-                pushOp(state, func, OP_PUSH_NULL);
-                pushOp(state, func, OP_PUSH);
-                pushInt32(state, func, tmpElems+1);
-                pushOp(state, func, OP_LIST);
-            }
-            compileExpression(state, func, head->val);
-            pushOp(state, func, OP_PUSH_NULL);
-            pushOp(state, func, OP_PUSH);
-            pushInt32(state, func, 2);
-            pushOp(state, func, OP_LIST);
-            tmpElems = 0;
-            continue;
-        }
-        if (head->unquoteSpliced) {
-            numElems++;
-            if (tmpElems) {
-                numElems++;
-                pushOp(state, func, OP_PUSH_NULL);
-                pushOp(state, func, OP_PUSH);
-                pushInt32(state, func, tmpElems+1);
-                pushOp(state, func, OP_LIST);
-            }
-            compileExpression(state, func, head->val);
-            tmpElems = 0;
-            continue;
-        }
-        tmpElems++;
-        compileQuasiquotedExpr(state, func, head->val);
-    }
-    if (!last->unquoteSpliced && !last->unquoted) {
-        if (!dotted && last != lst) {
-            tmpElems++;
-            pushOp(state, func, OP_PUSH_NULL);
-        }
-        pushOp(state, func, OP_PUSH);
-        pushInt32(state, func, tmpElems);
-        pushOp(state, func, OP_LIST);
-    }
-    if (numElems == 0) {
-        numElems++;
-    }
-    pushOp(state, func, OP_PUSH);
-    pushInt32(state, func, numElems);
-    pushOp(state, func, OP_APPEND);
-#endif
+    pushOp(state, func, OP_APPEND, line);
 }
 
 uint64 getTarget(LispisState *state, LispisFunction *func) {
@@ -401,7 +372,7 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
     assert(expr);
     switch (expr->exprType) {
         case EXPR_OBJECT: {
-            pushOp(state, func, OP_ALLOC_OBJECT);
+            pushOp(state, func, OP_ALLOC_OBJECT, expr->line);
             pushUint64(state, func, expr->obj.numElems);
             int currElem = 0;
             for (ExprList *e = expr->obj.elems; e; e = e->next) {
@@ -412,24 +383,24 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
                 } else {
                     assert(e->val->keyValPair.key->exprType ==
                            EXPR_SYMBOL_ID);
-                    pushOp(state, func, OP_PUSH);
+                    pushOp(state, func, OP_PUSH, expr->line);
                     pushSymbol(state, func,
                                e->val->keyValPair.key->symbolID);
                 }
-                pushOp(state, func, OP_SET_ELEM);
+                pushOp(state, func, OP_SET_ELEM, expr->line);
                 currElem++;
             }
             assert((uint32)currElem == expr->obj.numElems);
         } break;
         case EXPR_VECTOR: {
-            pushOp(state, func, OP_ALLOC_VECTOR);
+            pushOp(state, func, OP_ALLOC_VECTOR, expr->line);
             pushUint64(state, func, expr->vec.numElems);
             int currElem = 0;
             for (ExprList *e = expr->vec.elems; e; e = e->next) {
                 compileExpression(state, func, e->val);
-                pushOp(state, func, OP_PUSH);
+                pushOp(state, func, OP_PUSH, expr->line);
                 pushInt32(state, func, currElem);
-                pushOp(state, func, OP_SET_ELEM);
+                pushOp(state, func, OP_SET_ELEM, expr->line);
                 currElem++;
             }
             assert((uint32)currElem == expr->vec.numElems);
@@ -437,13 +408,13 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
         case EXPR_FOR: {
 
             compileExpression(state, func, expr->init);
-            pushOp(state, func, OP_SET_LOCAL);
+            pushOp(state, func, OP_SET_LOCAL, expr->line);
             pushUint64(state, func, expr->it->var.variableID);
             uint64 loopCheckTarget = getTarget(state, func);
             compileExpression(state, func, expr->pred);
-            pushOp(state, func, OP_JUMP_IF_TRUE);
+            pushOp(state, func, OP_JUMP_IF_TRUE, expr->line);
             uint64 loopCheckSuccededLoc = pushDummy(state, func);
-            pushOp(state, func, OP_JUMP);
+            pushOp(state, func, OP_JUMP, expr->line);
             uint64 loopCheckFailedLoc = pushDummy(state, func);
             Value loopCheckSuccededRel;
             loopCheckSuccededRel.i64 =
@@ -452,10 +423,10 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
             set(state, func, loopCheckSuccededRel, loopCheckSuccededLoc);
             for (ExprList *b = expr->body; b; b = b->next) {
                 compileExpression(state, func, b->val);
-                pushOp(state, func, OP_CLEAR_STACK);
+                pushOp(state, func, OP_CLEAR_STACK, expr->line);
             }
             compileExpression(state, func, expr->upd);
-            pushOp(state, func, OP_JUMP);
+            pushOp(state, func, OP_JUMP, expr->line);
 
             pushInt64(state, func, calcRelativeJumpTo(state, func,
                                                       loopCheckTarget));
@@ -473,26 +444,26 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
         //printf("\"%.*s\"", node->strLen, node->str);
         //} break;
         case EXPR_INT: {
-            pushOp(state, func, OP_PUSH);
+            pushOp(state, func, OP_PUSH, expr->line);
             pushInt32(state, func, expr->intVal);
         } break;
         case EXPR_DOUBLE: {
-            pushOp(state, func, OP_PUSH);
+            pushOp(state, func, OP_PUSH, expr->line);
             pushDouble(state, func, expr->doubleVal);
         } break;
         case EXPR_VARIABLE: {
             switch (expr->var.kind) {
                 case VAR_GLOBAL: {
-                    pushOp(state, func, OP_PUSH);
+                    pushOp(state, func, OP_PUSH, expr->line);
                     pushSymbol(state, func, expr->var.symbolID);
-                    pushOp(state, func, OP_PUSH_GLOBAL);
+                    pushOp(state, func, OP_PUSH_GLOBAL, expr->line);
                 } break;
                 case VAR_LOCAL: {
-                    pushOp(state, func, OP_PUSH_LOCAL);
+                    pushOp(state, func, OP_PUSH_LOCAL, expr->line);
                     pushUint64(state, func, expr->var.variableID);
                 } break;
                 case VAR_UPVAL: {
-                    pushOp(state, func, OP_PUSH_UPVAL);
+                    pushOp(state, func, OP_PUSH_UPVAL, expr->line);
                     pushUint64(state, func, expr->var.variableID);
                     func->upvalProtos[expr->var.variableID].depth =
                         expr->var.depth;
@@ -502,10 +473,14 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
                 default: assert(false);
             }
         } break;
+        case EXPR_BOOLEAN: {
+            pushOp(state, func, OP_PUSH, expr->line);
+            pushBoolean(state, func, expr->boolean);
+        } break;
         case EXPR_SYMBOL_ID: {
-            pushOp(state, func, OP_PUSH);
+            pushOp(state, func, OP_PUSH, expr->line);
             pushSymbol(state, func, expr->symbolID);
-            pushOp(state, func, OP_PUSH_GLOBAL);
+            pushOp(state, func, OP_PUSH_GLOBAL, expr->line);
         } break;
         case EXPR_CALL: {
             uint64 numArgs = 0;
@@ -515,13 +490,13 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
                 numArgs++;
             }
             compileExpression(state, func, expr->callee);
-            pushOp(state, func, OP_CALL);
+            pushOp(state, func, OP_CALL, expr->line);
             pushUint64(state, func, numArgs);
         } break;
         case EXPR_MACRO: {
             LispisFunction *newMacro = startNewMacro(state);
             compileLambdaParams(state, newMacro, expr->macro.params,
-                                expr->macro.paramsCount, expr->macro.varargs);
+                                expr->macro.paramsCount, expr->macro.varargs, expr->line);
             compileLambdaBody(state, newMacro, expr->macro.body);
 #if LOG_ENABLED
             printf("Macro %u\n", expr->macro.name);
@@ -542,7 +517,7 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
                            
         } break;
         case EXPR_LAMBDA: {
-            pushOp(state, func, OP_PUSH_LAMBDA_ID);
+            pushOp(state, func, OP_PUSH_LAMBDA_ID, expr->line);
             // FIX
             pushUint64(state, func, func->subFunctionsLength);
             LispisFunction *newFunc = startNewLambda(state, func);
@@ -558,16 +533,16 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
             }
             compileLambdaParams(state, newFunc, expr->lambda.params,
                                 expr->lambda.paramsCount,
-                                expr->lambda.varargs);
+                                expr->lambda.varargs, expr->line);
             compileLambdaBody(state, newFunc, expr->lambda.body);
             newFunc->numLocals = expr->lambda.numLocals;
             //encodeSymbolSection(state, newFunc);
         } break;
         case EXPR_DEFINE: {
             compileExpression(state, func, expr->value);
-            pushOp(state, func, OP_PUSH);
+            pushOp(state, func, OP_PUSH, expr->line);
             pushSymbol(state, func, expr->variable->var.symbolID);
-            pushOp(state, func, OP_SET_GLOBAL);
+            pushOp(state, func, OP_SET_GLOBAL, expr->line);
             // makes let! return the value, prob. pretty slow...
             compileExpression(state, func, expr->variable);
         } break;
@@ -575,17 +550,17 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
             compileExpression(state, func, expr->value);
             switch (expr->variable->var.kind) {
                 case VAR_GLOBAL: {
-                    pushOp(state, func, OP_PUSH);
+                    pushOp(state, func, OP_PUSH, expr->line);
                     pushSymbol(state, func, expr->variable->var.symbolID);
-                    pushOp(state, func, OP_SET_GLOBAL);
+                    pushOp(state, func, OP_SET_GLOBAL, expr->line);
                 } break;
                 case VAR_LOCAL: {
-                    pushOp(state, func, OP_SET_LOCAL);
+                    pushOp(state, func, OP_SET_LOCAL, expr->line);
                     pushUint64(state, func,
                                expr->variable->var.variableID);
                 } break;
                 case VAR_UPVAL: {
-                    pushOp(state, func, OP_SET_UPVAL);
+                    pushOp(state, func, OP_SET_UPVAL, expr->line);
                     pushUint64(state,
                                func, expr->variable->var.variableID);
                     func->upvalProtos[expr->variable->var.variableID].depth =
@@ -601,7 +576,7 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
         } break;
         case EXPR_LET: {
             compileExpression(state, func, expr->value);
-            pushOp(state, func, OP_SET_LOCAL);
+            pushOp(state, func, OP_SET_LOCAL, expr->line);
             pushUint64(state, func, expr->variable->var.variableID);
             //pushOp(state, func, OP_SET_LOCAL);
             // makes let! return the value, prob. pretty slow...
@@ -609,15 +584,15 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
         } break;
         case EXPR_IF: {
             compileExpression(state, func, expr->predicate);
-            pushOp(state, func, OP_JUMP_IF_TRUE);
+            pushOp(state, func, OP_JUMP_IF_TRUE, expr->line);
             uint64 trueTargetIdLoc = pushDummy(state, func);
             if (expr->falseBranch) {
                 compileExpression(state, func, expr->falseBranch);
             } else {
-                pushOp(state, func, OP_PUSH);
+                pushOp(state, func, OP_PUSH, expr->line);
                 pushUndef(state, func);
             }
-            pushOp(state, func, OP_JUMP);
+            pushOp(state, func, OP_JUMP, expr->line);
             uint64 afterTrueTargetIdLoc = pushDummy(state, func);
             Value trueRelTarget;
             trueRelTarget.i64 =
@@ -631,8 +606,8 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
 
         } break;
         case EXPR_QUASIQUOTE: {
-            compileQuasiquote(state, func,
-                              expr->quasiquoteList, expr->dotted);
+            compileQuasiquote(state, func, expr->quasiquoteList,
+                              expr->dotted, expr->line);
         } break;
         case EXPR_DO: {
             for (ExprList *e = expr->list; e; e = e->next) {
@@ -642,13 +617,13 @@ void compileExpression(LispisState *state, LispisFunction *func, Expr *expr) {
         case EXPR_REF: {
             compileExpression(state, func, expr->ref.obj);
             compileExpression(state, func, expr->ref.ref);
-            pushOp(state, func, OP_PUSH_ELEM);
+            pushOp(state, func, OP_PUSH_ELEM, expr->line);
         } break;
         case EXPR_REF_SET: {
             compileExpression(state, func, expr->refSet.obj);
             compileExpression(state, func, expr->refSet.val);
             compileExpression(state, func, expr->refSet.ref);
-            pushOp(state, func, OP_SET_ELEM);
+            pushOp(state, func, OP_SET_ELEM, expr->line);
         } break;
         default:assert(false);
     }

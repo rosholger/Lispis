@@ -27,6 +27,7 @@ enum ExprType {
     EXPR_DO,
     EXPR_REF,
     EXPR_REF_SET,
+    EXPR_BOOLEAN,
 };
 
 enum VariableKind {
@@ -59,6 +60,7 @@ struct LexicalVariable {
 
 struct Expr {
     union {
+        bool boolean;
         Expr *quoted; // QUOTE
         uint32 symbolID;
         String str; // SYMBOL, STRING

@@ -60,19 +60,6 @@ struct Env {
     Env *parentEnv; // lexical parents enviroment
 };
 
-struct GlobalVar {
-    Value val;
-    uint32 symbolID;
-    bool filled;
-};
-
-struct GlobalEnv {
-    GcObjectHeader header;
-    GlobalVar *variables;
-    uint64 variablesSize;
-    uint64 variablesFilled;
-};
-
 struct LispisFunction;
 
 struct Upval {
@@ -113,6 +100,7 @@ struct LispisFunction {
     uint32 numLocals;
     bool macro;
     Bytecode *bytecode;
+    int32 *instructionToLine;
     uint64 bytecodeSize;
     uint64 bytecodeTop; // used while compiling only
     LispisFunction **subFunctions;
@@ -136,10 +124,17 @@ struct Pair {
     Value cdr;
 };
 
+struct VectorBucket {
+    Value elems[VECTOR_BUCKET_SIZE];
+    VectorBucket *next;
+};
+
+// Vectors only expand, never contracts
 struct Vector {
     GcObjectHeader header;
     int32 size;
-    Value *elems;
+    int32 numFilled;
+    VectorBucket *firstBucket;
 };
 
 struct KeyValPair {
@@ -152,11 +147,12 @@ struct Object {
     GcObjectHeader header;
     Object *proto;
     int32 size;
+    int32 numFilled;
     KeyValPair *elems;
 };
 
 struct LispisState {
-    GlobalEnv globalEnviroment;
+    Object globalEnviroment;
     SymbolTable globalSymbolTable;
     ActivationRecord *currRecord;
     Value *dataStack;
@@ -210,6 +206,12 @@ bool runFunction(LispisState *state, Value funcObjValue, uint64 numArgs);
 bool runNullTerminatedString(LispisState *state, char *str);
 bool compileNullTerminatedString(LispisState *state, char *str,
                                   Value ret);
+
+Vector *allocVector(LispisState *state, int32 numToBeFilled);
+void extendVector(Vector *vector, int32 newNumberFilled);
+void appendVectorDestructive(LispisState *state,
+                             Vector *appendedTo,
+                             Vector *appended);
 
 void clearStack(LispisState *state);
 void markAndSweep(LispisState *state);

@@ -234,17 +234,12 @@ Expr *SymbolIdPass::transform(LispisState *state, Expr *expr) {
 }
 
 bool isMacro(LispisState *state, uint32 symbolID) {
-    GlobalEnv *env = &state->globalEnviroment;
-    uint32 variableID = symbolID % env->variablesSize;
-    uint32 startID = variableID;
-    while (env->variables[variableID].symbolID != symbolID) {
-        variableID++;
-        variableID = variableID % env->variablesSize;
-        if (variableID == startID) {
-            return false;
-        }
+    Value v;
+    try {
+        v = getGlobal(state, symbolID);
+    } catch (int e) {
+        return false;
     }
-    Value v = env->variables[variableID].val;
     if (getType(v) != LISPIS_LFUNC) {
         return false;
     } else {
@@ -257,7 +252,8 @@ Expr *evalMacro(LispisState *state, Expr *expr) {
     for (ExprList *arg = expr->arguments;
          arg; arg = arg->next) {
         numArgs++;
-        pushInternal(state, exprToConsList(state, arg->val));
+        Value a = exprToConsList(state, arg->val);
+        pushInternal(state, a);
     }
     // Dont catch exceptions here
     runFunctionInternal(state,
@@ -504,10 +500,64 @@ QuasiquoteList *createQuasiquotedList(LispisState *state, Expr *expr,
     return ret;
 }
 
+Expr *copyQuasiquoted(LispisState *state, Expr *expr, CompilerPass *pass) {
+    Expr *ret = 0;
+    switch (expr->exprType) {
+        case EXPR_STRING:
+        case EXPR_INT:
+        case EXPR_DOUBLE:
+        case EXPR_SYMBOL_ID: {
+            ret = (Expr *)malloc(sizeof(Expr));
+            *ret = *expr;
+        } break;
+        case EXPR_QUASIQUOTE: {
+            ret = (Expr *)malloc(sizeof(Expr));
+            *ret = *expr;
+            assert(expr->quasiquoteList);
+            ret->quasiquoteList =
+                (QuasiquoteList *)calloc(1, sizeof(QuasiquoteList));
+            if (expr->quasiquoteList->val) {
+                *ret->quasiquoteList = *expr->quasiquoteList;
+                if (expr->quasiquoteList->unquoted ||
+                    expr->quasiquoteList->unquoteSpliced) {
+                    *ret->quasiquoteList = *expr->quasiquoteList;
+                    ret->quasiquoteList->val =
+                        pass->transform(state, expr->quasiquoteList->val);
+                } else {
+                    ret->quasiquoteList->val =
+                        copyQuasiquoted(state, expr->quasiquoteList->val,
+                                        pass);
+                }
+                ret->quasiquoteList->next = 0;
+                QuasiquoteList *prev = ret->quasiquoteList;
+                for (QuasiquoteList *elem = expr->quasiquoteList->next;
+                     elem; elem = elem->next) {
+                    prev->next =
+                        (QuasiquoteList *)malloc(sizeof(QuasiquoteList));
+                    prev = prev->next;
+                    *prev = *elem;
+                    if (elem->unquoted || elem->unquoteSpliced) {
+                        prev->val = pass->transform(state, elem->val);
+                    } else {
+                        prev->val = copyQuasiquoted(state, elem->val,
+                                                    pass);
+                    }
+                    prev->next = 0;
+                }
+            }
+        } break;
+        default:assert(false);
+    }
+    return ret;
+}
+
 Expr *MacroExpansionPass::transform(LispisState *state, Expr *expr) {
                    
     Expr *ret = 0;
     switch (expr->exprType) {
+        case EXPR_QUASIQUOTE: {
+            ret = copyQuasiquoted(state, expr, this);
+        } break;
         case EXPR_VECTOR: {
             ret = copyVector(state, expr, this);
         } break;
@@ -575,6 +625,7 @@ Expr *MacroExpansionPass::transform(LispisState *state, Expr *expr) {
         } break;
         case EXPR_STRING:
         case EXPR_INT:
+        case EXPR_BOOLEAN:
         case EXPR_DOUBLE:
         case EXPR_SYMBOL_ID: {
             ret = (Expr *)malloc(sizeof(Expr));
@@ -680,57 +731,6 @@ Expr *MacroExpansionPass::startTransforming(LispisState *state,
     return prev;
 }
 
-Expr *copyQuasiquoted(LispisState *state, Expr *expr, CompilerPass *pass) {
-    Expr *ret = 0;
-    switch (expr->exprType) {
-        case EXPR_STRING:
-        case EXPR_INT:
-        case EXPR_DOUBLE:
-        case EXPR_SYMBOL_ID: {
-            ret = (Expr *)malloc(sizeof(Expr));
-            *ret = *expr;
-        } break;
-        case EXPR_QUASIQUOTE: {
-            ret = (Expr *)malloc(sizeof(Expr));
-            *ret = *expr;
-            assert(expr->quasiquoteList);
-            ret->quasiquoteList =
-                (QuasiquoteList *)calloc(1, sizeof(QuasiquoteList));
-            if (expr->quasiquoteList->val) {
-                *ret->quasiquoteList = *expr->quasiquoteList;
-                if (expr->quasiquoteList->unquoted ||
-                    expr->quasiquoteList->unquoteSpliced) {
-                    *ret->quasiquoteList = *expr->quasiquoteList;
-                    ret->quasiquoteList->val =
-                        pass->transform(state, expr->quasiquoteList->val);
-                } else {
-                    ret->quasiquoteList->val =
-                        copyQuasiquoted(state, expr->quasiquoteList->val,
-                                        pass);
-                }
-                ret->quasiquoteList->next = 0;
-                QuasiquoteList *prev = ret->quasiquoteList;
-                for (QuasiquoteList *elem = expr->quasiquoteList->next;
-                     elem; elem = elem->next) {
-                    prev->next =
-                        (QuasiquoteList *)malloc(sizeof(QuasiquoteList));
-                    prev = prev->next;
-                    *prev = *elem;
-                    if (elem->unquoted || elem->unquoteSpliced) {
-                        prev->val = pass->transform(state, elem->val);
-                    } else {
-                        prev->val = copyQuasiquoted(state, elem->val,
-                                                    pass);
-                    }
-                    prev->next = 0;
-                }
-            }
-        } break;
-        default:assert(false);
-    }
-    return ret;
-}
-
 Expr *DefmacroPass::transform(LispisState *state, Expr *expr) {
     Expr *ret = 0;
     switch (expr->exprType) {
@@ -745,6 +745,7 @@ Expr *DefmacroPass::transform(LispisState *state, Expr *expr) {
         } break;
         case EXPR_STRING:
         case EXPR_INT:
+        case EXPR_BOOLEAN:
         case EXPR_DOUBLE:
         case EXPR_SYMBOL_ID: {
             ret = (Expr *)calloc(1, sizeof(Expr));
@@ -921,6 +922,7 @@ Expr *LambdaPass::transform(LispisState *state, Expr *expr) {
         } break;
         case EXPR_STRING:
         case EXPR_INT:
+        case EXPR_BOOLEAN:
         case EXPR_DOUBLE:
         case EXPR_SYMBOL_ID: {
             ret = (Expr *)calloc(1, sizeof(Expr));
@@ -1098,6 +1100,7 @@ Expr *LetPass::transform(LispisState *state, Expr *expr) {
         } break;
         case EXPR_STRING:
         case EXPR_INT:
+        case EXPR_BOOLEAN:
         case EXPR_DOUBLE:
         case EXPR_SYMBOL_ID: {
             ret = (Expr *)malloc(sizeof(Expr));
@@ -1186,6 +1189,7 @@ Expr *SetPass::transform(LispisState *state, Expr *expr) {
         } break;
         case EXPR_STRING:
         case EXPR_INT:
+        case EXPR_BOOLEAN:
         case EXPR_DOUBLE:
         case EXPR_SYMBOL_ID: {
             ret = (Expr *)malloc(sizeof(Expr));
@@ -1280,6 +1284,7 @@ Expr *DefinePass::transform(LispisState *state, Expr *expr) {
         } break;
         case EXPR_STRING:
         case EXPR_INT:
+        case EXPR_BOOLEAN:
         case EXPR_DOUBLE:
         case EXPR_SYMBOL_ID: {
             ret = (Expr *)malloc(sizeof(Expr));
@@ -1374,6 +1379,7 @@ Expr *IfPass::transform(LispisState *state, Expr *expr) {
         } break;
         case EXPR_STRING:
         case EXPR_INT:
+        case EXPR_BOOLEAN:
         case EXPR_DOUBLE:
         case EXPR_SYMBOL_ID: {
             ret = (Expr *)malloc(sizeof(Expr));
@@ -1485,6 +1491,7 @@ Expr *ForPass::transform(LispisState *state, Expr *expr) {
         case EXPR_STRING:
         case EXPR_INT:
         case EXPR_DOUBLE:
+        case EXPR_BOOLEAN:
         case EXPR_SYMBOL_ID: {
             ret = (Expr *)malloc(sizeof(Expr));
             *ret = *expr;
@@ -1667,6 +1674,7 @@ Expr *DoPass::transform(LispisState *state, Expr *expr) {
         case EXPR_STRING:
         case EXPR_INT:
         case EXPR_DOUBLE:
+        case EXPR_BOOLEAN:
         case EXPR_SYMBOL_ID: {
             ret = (Expr *)malloc(sizeof(Expr));
             *ret = *expr;
@@ -1775,6 +1783,7 @@ Expr *RefPass::transform(LispisState *state, Expr *expr) {
         case EXPR_STRING:
         case EXPR_INT:
         case EXPR_DOUBLE:
+        case EXPR_BOOLEAN:
         case EXPR_SYMBOL_ID: {
             ret = (Expr *)malloc(sizeof(Expr));
             *ret = *expr;
@@ -2042,6 +2051,7 @@ Expr *VariablePass::transform(LispisState *state, Expr *expr) {
         } break;
         case EXPR_STRING:
         case EXPR_INT:
+        case EXPR_BOOLEAN:
         case EXPR_DOUBLE: {
             ret = (Expr *)malloc(sizeof(Expr));
             *ret = *expr;

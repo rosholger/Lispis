@@ -74,6 +74,9 @@ int main(int argsc, char **args) {
         basicVectorSet,
         nestedVector,
         nestedVectorSet,
+        appendTest1,
+        appendTest2,
+        appendTest3,
         //object_tests
         basicObjectTest,
         basicObjectSet,
